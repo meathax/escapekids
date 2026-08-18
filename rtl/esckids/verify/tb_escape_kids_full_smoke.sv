@@ -91,6 +91,26 @@ module tb_escape_kids_full_smoke;
     reg hs_prev;
     reg vs_prev;
     reg lvbl_prev;
+    // Diagnostic-only long-run cadence instrumentation.  This is additive:
+    // it never influences the PASS/FAIL gate below.  diag_cycle_count is a
+    // free-running !rst cycle counter (unlike scenario_cycle, it advances in
+    // every smoke mode, not only InputScenario/ServiceGate/Raster).  When
+    // SMOKE_SNAPSHOT_INTERVAL>0 it periodically reports lvbl_rises/
+    // lvbl_falls/samples plus the delta since the previous snapshot, so a
+    // stalled video/audio pipeline shows up as a run of zero deltas instead
+    // of only being inferred from the final totals.
+    integer diag_cycle_count;
+    integer snapshot_interval;
+    integer last_snapshot_lvbl_rises;
+    integer last_snapshot_lvbl_falls;
+    integer last_snapshot_samples;
+    // Diagnostic-only override for when the legacy InputScenario schedule's
+    // final edge (historically a hardcoded 14000000) marks itself done.
+    // Defaults to 14000000 so every existing invocation is byte-for-byte
+    // unchanged; a diagnostic long-run can raise it (SMOKE_INPUT_DONE_CYCLE)
+    // to keep the simulation alive well past the point the original 14M
+    // schedule would otherwise let the PASS gate fire.
+    integer input_done_cycle;
     reg [1023:0] media_file;
     reg [1023:0] auth_stream_file;
     reg [1023:0] smoke_barrier;
@@ -809,9 +829,9 @@ module tb_escape_kids_full_smoke;
                             joystick1, joystick2, joystick3, joystick4, service);
                     input_trace_seq <= input_trace_seq + 1;
                 end
-                14000000: input_scenario_done <= 1'b1;
                 default:;
             endcase
+            if (scenario_cycle == input_done_cycle) input_scenario_done <= 1'b1;
         end
         if (stack_debug && !rst &&
             (dut.u_game.u_main.cpu_addr == 16'h07ff ||
@@ -840,6 +860,22 @@ module tb_escape_kids_full_smoke;
             hs_prev <= HS;
             vs_prev <= VS;
             lvbl_prev <= LVBL;
+            // Diagnostic-only periodic cadence snapshot.  Additive: does not
+            // read or write any PASS/FAIL gate state, and is disabled by
+            // default (snapshot_interval==0 leaves default runs' logs
+            // byte-for-byte unchanged).
+            diag_cycle_count <= diag_cycle_count + 1;
+            if (snapshot_interval != 0 &&
+                (diag_cycle_count % snapshot_interval == 0)) begin
+                $display("ESCAPE KIDS VIDEO/AUDIO CADENCE cycle=%0d lvbl_rises=%0d lvbl_falls=%0d samples=%0d d_lvbl_rises=%0d d_lvbl_falls=%0d d_samples=%0d",
+                    diag_cycle_count, lvbl_rises, lvbl_falls, samples,
+                    lvbl_rises - last_snapshot_lvbl_rises,
+                    lvbl_falls - last_snapshot_lvbl_falls,
+                    samples - last_snapshot_samples);
+                last_snapshot_lvbl_rises <= lvbl_rises;
+                last_snapshot_lvbl_falls <= lvbl_falls;
+                last_snapshot_samples <= samples;
+            end
         end
         // Permanent integration invariant: on every accepted work-RAM cycle,
         // the address physically presented to the generated BRAM must be the
@@ -1293,6 +1329,12 @@ module tb_escape_kids_full_smoke;
         hs_prev = 1'b0;
         vs_prev = 1'b0;
         lvbl_prev = 1'b0;
+        diag_cycle_count = 0;
+        snapshot_interval = 0;
+        last_snapshot_lvbl_rises = 0;
+        last_snapshot_lvbl_falls = 0;
+        last_snapshot_samples = 0;
+        input_done_cycle = 14000000;
         pending_valid = 1'b0;
         pending_phase = 1'b0;
         pending_bank = 2'd0;
@@ -1412,6 +1454,10 @@ module tb_escape_kids_full_smoke;
             trace_min_events = 0;
         if (!$value$plusargs("SMOKE_INPUT_MIN=%d", input_min_reads))
             input_min_reads = 0;
+        if (!$value$plusargs("SMOKE_SNAPSHOT_INTERVAL=%d", snapshot_interval))
+            snapshot_interval = 0;
+        if (!$value$plusargs("SMOKE_INPUT_DONE_CYCLE=%d", input_done_cycle))
+            input_done_cycle = 14000000;
         if ($value$plusargs("SMOKE_INPUT_TRACE=%s", input_trace_file)) begin
             input_trace_fd = $fopen(input_trace_file, "w");
             if (input_trace_fd == 0)
