@@ -168,6 +168,55 @@ module tb_escape_kids_full_smoke;
     reg [7:0] raster_shadow [0:12];
     reg workram_contract;
     reg workram_alias_inject;
+    // ------------------------------------------------------------------
+    // Diagnostic native-frame capture.  Entirely opt-in: nothing below is
+    // reachable unless +SMOKE_FRAME_DIR is supplied, so every pre-existing
+    // lane keeps byte-identical behaviour.  Every completed native frame
+    // ordinal is sampled and receipted; PPM emission is presentation-only
+    // and may be restricted with first/last/stride.
+    // ------------------------------------------------------------------
+    localparam integer FRAME_MAX_W = 512;
+    localparam integer FRAME_MAX_H = 320;
+    reg [2047:0] frame_dir;
+    reg [2047:0] frame_path;
+    reg [2047:0] frame_receipt_file;
+    integer frame_receipt_fd;
+    reg frame_capture;
+    integer frame_first, frame_last, frame_stride, frame_stop;
+    integer frame_ord, frame_x, frame_y, frame_w, frame_h;
+    integer frame_fd, frame_idx, frame_nonblack;
+    reg [31:0] frame_hash;
+    // Escape external-timing bridge observation (diagnostic only).
+    integer frame_hld, frame_vld;
+    integer frame_vmin, frame_vmax, frame_hmin, frame_hmax, frame_vsteps;
+    reg [8:0] frame_vprev;
+    reg frame_hld_prev, frame_vld_prev;
+    integer tile_cpu_wr, tile_ram_we, tile_gfxcs_wr, pal_cpu_wr;
+
+    // Where do the K052109 tilemap writes go?  Sampled on every clock, not
+    // only at pxl_cen, because the CPU write cycle is clk-domain.
+    always @(posedge clk) begin
+        if (rst) begin
+            tile_cpu_wr   = 0;
+            tile_ram_we   = 0;
+            tile_gfxcs_wr = 0;
+            pal_cpu_wr    = 0;
+        end else if (frame_capture) begin
+            if (dut.u_game.u_main.tilesys_cs && dut.u_game.u_main.cpu_we &&
+                dut.u_game.u_main.u_cpu.cen_out && dut.u_game.u_main.dtack)
+                tile_cpu_wr = tile_cpu_wr + 1;
+            if (dut.u_game.u_main.pal_cs && dut.u_game.u_main.cpu_we &&
+                dut.u_game.u_main.u_cpu.cen_out && dut.u_game.u_main.dtack)
+                pal_cpu_wr = pal_cpu_wr + 1;
+            if (dut.u_game.u_video.u_scroll.u_tilemap.gfx_cs &&
+                dut.u_game.u_video.u_scroll.u_tilemap.cpu_we)
+                tile_gfxcs_wr = tile_gfxcs_wr + 1;
+            if (|dut.u_game.u_video.u_scroll.u_tilemap.we)
+                tile_ram_we = tile_ram_we + 1;
+        end
+    end
+    reg frame_lvbl_prev, frame_lhbl_prev;
+    reg [7:0] frame_buf [0:FRAME_MAX_W*FRAME_MAX_H*3-1];
     reg [1023:0] buserror_trace_file;
     integer buserror_trace_fd;
     integer buserror_seen;
@@ -498,23 +547,33 @@ module tb_escape_kids_full_smoke;
                 $fatal(1, "Authenticated stream has trailing data after %0h bytes", 26'h6e0000);
             $fclose(fd);
             wait (!dwnld_busy);
-            // The external model applies SWAB=1 exactly as jtframe_sdram does:
-            // even stream bytes land in the high lane and odd bytes in low.
-            if (media[media_index(2'd0, 22'h000000) + 1] !== sample_main)
+            // jtframe_dwnld registers ioctl_wr/dout for one clock before it
+            // presents prog_we, so the final stream byte is still in flight
+            // when dwnld_busy drops.  Flush the pipeline before sampling.
+            repeat (8) @(posedge clk);
+            // jtframe_dwnld is instantiated with SWAB=1, so
+            // nx_prog_mask = (eff_addr[0]^1) ? 2'b10 : 2'b01 (active low):
+            // an even effective byte offset writes the LOW lane
+            // (prog_data[7:0] -> media[idx]) and an odd offset writes the
+            // high lane.  That matches the fast diagnostic lane, where
+            // $readmemh puts the even ROM byte at the even media index.
+            // (The previous high-lane expectation here was never exercised:
+            // the AUTH_MEDIA full-smoke lane had no successful run.)
+            if (media[media_index(2'd0, 22'h000000)] !== sample_main)
                 $fatal(1, "main physical lane mismatch got=%02h exp=%02h",
-                    media[media_index(2'd0, 22'h000000) + 1], sample_main);
-            if (media[media_index(2'd1, 22'h000000) + 1] !== sample_sound)
+                    media[media_index(2'd0, 22'h000000)], sample_main);
+            if (media[media_index(2'd1, 22'h000000)] !== sample_sound)
                 $fatal(1, "sound physical lane mismatch got=%02h exp=%02h",
-                    media[media_index(2'd1, 22'h000000) + 1], sample_sound);
-            if (media[media_index(2'd1, 22'h010000) + 1] !== sample_pcm)
+                    media[media_index(2'd1, 22'h000000)], sample_sound);
+            if (media[media_index(2'd1, 22'h010000)] !== sample_pcm)
                 $fatal(1, "PCM physical lane mismatch got=%02h exp=%02h",
-                    media[media_index(2'd1, 22'h010000) + 1], sample_pcm);
-            if (media[media_index(2'd2, 22'h000000) + 1] !== sample_tiles)
+                    media[media_index(2'd1, 22'h010000)], sample_pcm);
+            if (media[media_index(2'd2, 22'h000000)] !== sample_tiles)
                 $fatal(1, "tile physical lane mismatch got=%02h exp=%02h",
-                    media[media_index(2'd2, 22'h000000) + 1], sample_tiles);
-            if (media[media_index(2'd3, 22'h000000) + 1] !== sample_sprites)
+                    media[media_index(2'd2, 22'h000000)], sample_tiles);
+            if (media[media_index(2'd3, 22'h000000)] !== sample_sprites)
                 $fatal(1, "sprite physical lane mismatch got=%02h exp=%02h",
-                    media[media_index(2'd3, 22'h000000) + 1], sample_sprites);
+                    media[media_index(2'd3, 22'h000000)], sample_sprites);
             if (sample_gap !== 8'h00)
                 $fatal(1, "alignment gap is non-zero at 0x020000: %02h", sample_gap);
             if (loader_writes !== 26'h6e0000)
@@ -522,6 +581,149 @@ module tb_escape_kids_full_smoke;
         end
     endtask
 `endif
+
+    // Presentation-only: serialise the already-sampled native frame to a
+    // binary PPM (P6).  Never called unless frame capture is enabled.
+    task automatic frame_emit;
+        integer fx, fy, base;
+        begin
+            $sformat(frame_path, "%0s/frame_%05d.ppm", frame_dir, frame_ord);
+            frame_fd = $fopen(frame_path, "wb");
+            if (frame_fd == 0)
+                $fatal(1, "Cannot open frame file %0s", frame_path);
+            $fwrite(frame_fd, "P6\n%0d %0d\n255\n", frame_w, frame_h);
+            for (fy = 0; fy < frame_h; fy = fy + 1) begin
+                base = fy*FRAME_MAX_W*3;
+                for (fx = 0; fx < frame_w*3; fx = fx + 1)
+                    $fwrite(frame_fd, "%c", frame_buf[base+fx]);
+            end
+            $fclose(frame_fd);
+            frame_dump_ram;
+        end
+    endtask
+
+    // Diagnostic: the rendered screen is a single 8x8 tile repeated, which is
+    // either uniform tilemap VRAM (a CPU/write-path fault) or a stuck scan
+    // address (a video read-path fault).  Dump the raw K052109 code/attr RAM
+    // and the palette RAM alongside the frame so the two can be told apart.
+    task automatic frame_dump_ram;
+        integer fd, k;
+        reg [2047:0] path;
+        begin
+            $sformat(path, "%0s/vram_%05d.bin", frame_dir, frame_ord);
+            fd = $fopen(path, "wb");
+            if (fd != 0) begin
+                for (k = 0; k < 8192; k = k + 1)
+                    $fwrite(fd, "%c",
+                        dut.u_game.u_video.u_scroll.u_tilemap.u_code.u_dual.u_ram.mem[k]);
+                for (k = 0; k < 8192; k = k + 1)
+                    $fwrite(fd, "%c",
+                        dut.u_game.u_video.u_scroll.u_tilemap.u_attr.u_dual.u_ram.mem[k]);
+                for (k = 0; k < 4096; k = k + 1)
+                    $fwrite(fd, "%c",
+                        dut.u_game.u_video.u_colmix.u_ram.u_dual.u_ram.mem[k]);
+                $fclose(fd);
+            end
+        end
+    endtask
+
+    // Every completed native frame ordinal gets a receipt line, whether or
+    // not a PPM was written for it.  The hash is accumulated per sampled
+    // pixel, so it covers the whole active window at pixel-clock-enable.
+    task automatic frame_receipt_line;
+        begin
+            if (frame_receipt_fd != 0)
+                $fwrite(frame_receipt_fd,
+                    "{\"schema\":\"escape-kids-native-frame-v1\",\"frame\":%0d,\"width\":%0d,\"height\":%0d,\"hash\":%0d,\"nonblack\":%0d,\"hld\":%0d,\"vld\":%0d,\"vdump_min\":%0d,\"vdump_max\":%0d,\"vdump_steps\":%0d,\"hdump_min\":%0d,\"hdump_max\":%0d,\"tile_cpu_wr\":%0d,\"tile_gfxcs_wr\":%0d,\"tile_ram_we\":%0d,\"pal_cpu_wr\":%0d,\"k052109_cfg\":%0d,\"emitted\":%s}\n",
+                    frame_ord, frame_w, frame_h, frame_hash, frame_nonblack,
+                    frame_hld, frame_vld, frame_vmin, frame_vmax, frame_vsteps,
+                    frame_hmin, frame_hmax,
+                    tile_cpu_wr, tile_gfxcs_wr, tile_ram_we, pal_cpu_wr,
+                    dut.u_game.u_video.u_scroll.u_tilemap.cfg,
+                    (frame_ord >= frame_first && frame_ord <= frame_last &&
+                     ((frame_ord - frame_first) % frame_stride) == 0) ? "true" : "false");
+        end
+    endtask
+
+    always @(posedge clk) begin
+        if (rst) begin
+            frame_x = 0;
+            frame_y = 0;
+            frame_w = 0;
+            frame_h = 0;
+            frame_nonblack = 0;
+            frame_hash = 32'h811c9dc5;
+            frame_lvbl_prev = 1'b0;
+            frame_lhbl_prev = 1'b0;
+        end else if (frame_capture && pxl_cen) begin
+            // External-timing bridge observation: the Escape CCU load pulses
+            // and the reconstructed 9-bit native counters.  Read-only.
+            if (dut.u_game.u_video.u_scroll.ext_hld && !frame_hld_prev)
+                frame_hld = frame_hld + 1;
+            if (dut.u_game.u_video.u_scroll.ext_vld && !frame_vld_prev)
+                frame_vld = frame_vld + 1;
+            frame_hld_prev = dut.u_game.u_video.u_scroll.ext_hld;
+            frame_vld_prev = dut.u_game.u_video.u_scroll.ext_vld;
+            if (dut.u_game.u_video.u_scroll.esc_vdump < frame_vmin)
+                frame_vmin = dut.u_game.u_video.u_scroll.esc_vdump;
+            if (dut.u_game.u_video.u_scroll.esc_vdump > frame_vmax)
+                frame_vmax = dut.u_game.u_video.u_scroll.esc_vdump;
+            if (dut.u_game.u_video.u_scroll.esc_hdump < frame_hmin)
+                frame_hmin = dut.u_game.u_video.u_scroll.esc_hdump;
+            if (dut.u_game.u_video.u_scroll.esc_hdump > frame_hmax)
+                frame_hmax = dut.u_game.u_video.u_scroll.esc_hdump;
+            if (dut.u_game.u_video.u_scroll.esc_vdump !== frame_vprev)
+                frame_vsteps = frame_vsteps + 1;
+            frame_vprev = dut.u_game.u_video.u_scroll.esc_vdump;
+            if (LVBL && LHBL) begin
+                if (frame_x < FRAME_MAX_W && frame_y < FRAME_MAX_H) begin
+                    frame_idx = (frame_y*FRAME_MAX_W + frame_x)*3;
+                    frame_buf[frame_idx+0] = red;
+                    frame_buf[frame_idx+1] = green;
+                    frame_buf[frame_idx+2] = blue;
+                end
+                if (red != 8'd0 || green != 8'd0 || blue != 8'd0)
+                    frame_nonblack = frame_nonblack + 1;
+                frame_hash = (frame_hash ^ {24'd0, red})   * 32'h01000193;
+                frame_hash = (frame_hash ^ {24'd0, green}) * 32'h01000193;
+                frame_hash = (frame_hash ^ {24'd0, blue})  * 32'h01000193;
+                frame_x = frame_x + 1;
+            end
+            if (frame_lhbl_prev && !LHBL) begin
+                if (frame_x > frame_w) frame_w = frame_x;
+                if (frame_x > 0) frame_y = frame_y + 1;
+                frame_x = 0;
+            end
+            if (frame_lvbl_prev && !LVBL) begin
+                frame_h = (frame_y > FRAME_MAX_H) ? FRAME_MAX_H : frame_y;
+                if (frame_w > FRAME_MAX_W) frame_w = FRAME_MAX_W;
+                if (frame_w > 0 && frame_h > 0 &&
+                    frame_ord >= frame_first && frame_ord <= frame_last &&
+                    ((frame_ord - frame_first) % frame_stride) == 0)
+                    frame_emit;
+                frame_receipt_line;
+                frame_ord = frame_ord + 1;
+                frame_x = 0;
+                frame_y = 0;
+                frame_w = 0;
+                frame_nonblack = 0;
+                frame_hash = 32'h811c9dc5;
+                frame_hld = 0;
+                frame_vld = 0;
+                frame_vsteps = 0;
+                frame_vmin = 1000; frame_vmax = 0;
+                frame_hmin = 1000; frame_hmax = 0;
+                if (frame_stop > 0 && frame_ord >= frame_stop) begin
+                    if (frame_receipt_fd != 0) $fclose(frame_receipt_fd);
+                    frame_receipt_fd = 0;
+                    $display("ESCAPE KIDS FRAME CAPTURE DONE frames=%0d", frame_ord);
+                    $finish;
+                end
+            end
+            frame_lhbl_prev = LHBL;
+            frame_lvbl_prev = LVBL;
+        end
+    end
 
     // Optional phase-edge diagnostic.  JTKCPU's internal clken is the 1x
     // state-update/memory-consume phase; sampling its rising edge avoids
@@ -976,7 +1178,10 @@ module tb_escape_kids_full_smoke;
         if (dut.u_game.u_main.u_cpu.buserror)
             $display("CPU-BUSERROR t=%0t pc=%h addr=%h op=%h din=%h dtack=%b", $time, dut.u_game.u_main.u_cpu.pc, dut.u_game.u_main.u_cpu.addr, dut.u_game.u_main.u_cpu.op, dut.u_game.u_main.cpu_din, dut.u_game.u_main.u_cpu.dtack);
 `endif
-        if (!rst &&
+        // Frame capture owns the stop condition when it is enabled; the
+        // ordinary barrier would terminate long before the boot self-test
+        // screens are reachable.  Default-off, so no existing lane changes.
+        if (!rst && !frame_capture &&
             ((input_scenario && input_scenario_done && input_reads >= input_min_reads &&
               frames > 2 && samples > 8 && rom_reads > 8) ||
              (!service_gate_enabled && !raster_enabled && !input_scenario && barrier_frame &&
@@ -1373,6 +1578,34 @@ module tb_escape_kids_full_smoke;
         raster_shadow[12] = 8'd0;
         workram_contract = $test$plusargs("SMOKE_WORKRAM_CONTRACT");
         workram_alias_inject = $test$plusargs("SMOKE_WORKRAM_ALIAS_INJECT");
+        frame_capture = 1'b0;
+        frame_dir = "";
+        frame_path = "";
+        frame_receipt_file = "";
+        frame_receipt_fd = 0;
+        frame_first = 0;
+        frame_last = 0;
+        frame_stride = 1;
+        frame_stop = 0;
+        frame_ord = 0;
+        frame_x = 0;
+        frame_y = 0;
+        frame_w = 0;
+        frame_h = 0;
+        frame_fd = 0;
+        frame_idx = 0;
+        frame_nonblack = 0;
+        frame_hash = 32'h811c9dc5;
+        frame_lvbl_prev = 1'b0;
+        frame_lhbl_prev = 1'b0;
+        frame_hld = 0;
+        frame_vld = 0;
+        frame_vsteps = 0;
+        frame_vmin = 1000; frame_vmax = 0;
+        frame_hmin = 1000; frame_hmax = 0;
+        frame_vprev = 9'h1ff;
+        frame_hld_prev = 1'b0;
+        frame_vld_prev = 1'b0;
         buserror_trace_file = "";
         buserror_trace_fd = 0;
         buserror_seen = 0;
@@ -1391,7 +1624,14 @@ module tb_escape_kids_full_smoke;
 `endif
         if ($value$plusargs("SMOKE_AUTH_STREAM=%s", auth_stream_file))
             auth_mode = 1'b1;
+`ifdef AUTH_MEDIA
+        // The physical four-bank model must start fully defined, otherwise
+        // any read outside the loaded MRA stream returns X (Icarus) or an
+        // --x-initial pattern (Verilator) and poisons the video path.
+        for (i = 0; i < 33554432; i = i + 1) media[i] = 8'h00;
+`else
         for (i = 0; i < 1048576; i = i + 1) media[i] = 8'h00;
+`endif
         if (!$value$plusargs("SMOKE_MAIN=%s", media_file))
             media_file = ".mister/mame/main.hex";
         if (!$value$plusargs("SMOKE_CYCLES=%d", max_cycles))
@@ -1454,6 +1694,32 @@ module tb_escape_kids_full_smoke;
             joystick4 = 7'h7f;
             service = 1'b1;
         end
+        if ($value$plusargs("SMOKE_FRAME_DIR=%s", frame_dir)) begin
+            frame_capture = 1'b1;
+            if (!$value$plusargs("SMOKE_FRAME_FIRST=%d", frame_first))
+                frame_first = 0;
+            if (!$value$plusargs("SMOKE_FRAME_LAST=%d", frame_last))
+                frame_last = 1000000;
+            if (!$value$plusargs("SMOKE_FRAME_STRIDE=%d", frame_stride))
+                frame_stride = 1;
+            if (frame_stride < 1) frame_stride = 1;
+            if (!$value$plusargs("SMOKE_FRAME_STOP=%d", frame_stop))
+                frame_stop = 0;
+            if ($value$plusargs("SMOKE_FRAME_RECEIPT=%s", frame_receipt_file)) begin
+                frame_receipt_fd = $fopen(frame_receipt_file, "w");
+                if (frame_receipt_fd == 0)
+                    $fatal(1, "Cannot open frame receipt %0s", frame_receipt_file);
+            end
+        end
+        // jtframe_debug_keys drives gfx_en=4'hf on real hardware whenever the
+        // debug key path is not compiled in, so every layer is enabled.  The
+        // harness historically tied it to 0, which force-blanks lyrf/lyra/
+        // lyrb and the sprite layer and makes any video observation useless.
+        // Existing lanes keep the historical 0 unless they ask otherwise.
+        if ($value$plusargs("SMOKE_GFX_EN=%d", i))
+            gfx_en = i[3:0];
+        else if (frame_capture)
+            gfx_en = 4'hf;
         if (!$value$plusargs("SMOKE_BUSERROR_TRACE=%s", buserror_trace_file))
             buserror_trace_file = "";
         if ($test$plusargs("SMOKE_TRACE_PHASE"))

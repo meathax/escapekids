@@ -330,6 +330,16 @@ always @(*) begin
                       objreg_cs || pcu_cs || k053252_cs || snd_irq ||
                       snd_cs || objread_cs || A==16'h3fd0 ||
                       A==16'h3fd2 || A==16'h3fda);
+        // The K052109 owns its own CPU memory mapper (REG_CFG bits 1:0).  It
+        // powers up with cfg=0, which places the register page at CPU
+        // 0x7C00-0x7FFF, i.e. OUTSIDE the 0x2000-0x5FFF window the mapper
+        // only reaches once cfg has been programmed.  Escape Kids writes
+        // 0x12 to 0x7C00 exactly once at boot (verified in MAME at
+        // PC=0x803F) to select that window.  Without this the register
+        // write never reaches the chip, cfg stays 0, every tile RAM chip
+        // select stays inactive and the whole tilemap is dropped.
+        // Writes only: 0x6000-0x7FFF is the banked program ROM for reads.
+        if( cpu_we && A[15:10]==6'b011111 ) tilesys_cs = 1;
         io_cs       = 0;
         cr_cs       = 0;
         out_cs      = 0;
