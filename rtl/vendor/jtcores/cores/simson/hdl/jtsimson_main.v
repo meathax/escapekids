@@ -523,9 +523,13 @@ jtframe_edge #(.QSET(0)) u_firq (
 );
 
 /* xverilator tracing_off */
-// there is a reset for the first 8 frames, skip it in sims
-always @(posedge clk) rst_cmb <= rst `ifndef SIMULATION | rst8 `endif ;
-// always @(posedge clk) rst_cmb <= rst | rst8;
+// The donor profiles retain the K052109 eight-frame start-up hold. Escape
+// Kids uses the board reset and its external K053252 timing instead.
+always @(posedge clk) rst_cmb <= rst
+`ifndef SIMULATION
+    | (rst8 & ~esckids)
+`endif
+;
 assign irq_mx = ((vendetta|esckids) ? irqn_ff : irq_n) | ~dip_pause;
 
 `ifdef SIMSON

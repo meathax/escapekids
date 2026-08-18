@@ -93,28 +93,30 @@ wire        hflip_en;
 wire [12:0] pre_a, pre_b, pre_f;
 reg         parsur;
 reg  [8:0]  esc_hdump, esc_vdump;
-wire        esc_frame;
-
-assign esc_frame = esc_hdump==9'h19f;
+reg         esc_vld_pending;
 
 // The CCU exposes load pulses rather than the K052109's 9-bit counters.
-// Reconstruct the measured native domains (H=020..19F, V=0F8..1FF) in the
-// 48 MHz domain.  This bridge is used only by Escape Kids.
+// hld/vld are registered by the K053252, so reconstruct the measured native
+// domains from those load events rather than wrapping a cycle before hld.
+// vld occurs earlier in the final line; retain it until hld commits the next
+// line.  This bridge is used only by Escape Kids.
 always @(posedge clk) begin
     if( rst ) begin
-        esc_hdump <= 9'h020;
-        esc_vdump <= 9'h0f8;
+        esc_hdump       <= 9'h020;
+        esc_vdump       <= 9'h0f8;
+        esc_vld_pending <= 1'b0;
     end else if( pxl_cen && esckids ) begin
+        if( ext_vld ) esc_vld_pending <= 1'b1;
         if( ext_hld ) begin
             esc_hdump <= 9'h020;
-            if( ext_vld )
+            if( ext_vld | esc_vld_pending )
                 esc_vdump <= 9'h0f8;
-            else if( esc_frame )
+            else
                 esc_vdump <= esc_vdump==9'h1ff ? 9'h0f8 : esc_vdump+1'b1;
-        end else if( esc_hdump==9'h19f )
-            esc_hdump <= 9'h020;
-        else
+            esc_vld_pending <= 1'b0;
+        end else begin
             esc_hdump <= esc_hdump+1'b1;
+        end
     end
 end
 

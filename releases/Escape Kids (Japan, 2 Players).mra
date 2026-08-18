@@ -6,11 +6,10 @@
     <bootleg>no</bootleg>
     <name>Escape Kids (Japan, 2 Players)</name>
     <setname>esckidsj</setname>
-    <mameversion>0289</mameversion>
     <year>1991</year>
     <manufacturer>Konami</manufacturer>
     <players>2</players>
-    <rbf>Arcade-EscapeKids</rbf>
+    <rbf>EscapeKids</rbf>
     <joystick>8</joystick>
     <region>Japan</region>
     <rom index="0" zip="esckids.zip" md5="none">
