@@ -25,7 +25,17 @@ module tb_escape_kids_full_smoke;
     reg [5:0] snd_en = 6'h3f;
     reg [7:0] snd_vol = 8'hff;
     reg [31:0] status = 0, dipsw = 0;
-    reg dip_pause = 0, dip_test = 0, service = 0, tilt = 0;
+    // dip_pause is jtframe_dip's synthesized "not paused" signal
+    // (jtframe_dip.v: "dip_pause <= ~game_pause & ~osd_shown; // active low"),
+    // i.e. 1 = normal play, 0 = paused/frozen.  This standalone harness has
+    // no jtframe_dip instance and must present the same steady-state value
+    // jtframe_board delivers once boot/OSD settle in a real integration:
+    // dip_pause=1.  Leaving it at its 0 (paused) reset value permanently
+    // deasserts jtsimson_main's irq_mx (irq_mx = irqn_ff | ~dip_pause), which
+    // holds jtkcpu's active-low irq_n input inactive for the entire run --
+    // the self-test sequencer's IRQ-gated screen advance can then never
+    // fire, even though irqn_ff/irqen/CC.I are all otherwise correct.
+    reg dip_pause = 1, dip_test = 0, service = 0, tilt = 0;
     wire dip_flip;
     reg [1:0] dip_fxlevel = 0;
     reg [3:0] gfx_en = 0;
@@ -102,6 +112,7 @@ module tb_escape_kids_full_smoke;
     integer trace_seq;
     integer trace_limit;
     integer trace_min_events;
+    integer trace_start_frame;
     reg trace_enabled;
     reg trace_phase;
     reg stack_debug;
@@ -634,12 +645,13 @@ module tb_escape_kids_full_smoke;
         begin
             if (frame_receipt_fd != 0)
                 $fwrite(frame_receipt_fd,
-                    "{\"schema\":\"escape-kids-native-frame-v1\",\"frame\":%0d,\"width\":%0d,\"height\":%0d,\"hash\":%0d,\"nonblack\":%0d,\"hld\":%0d,\"vld\":%0d,\"vdump_min\":%0d,\"vdump_max\":%0d,\"vdump_steps\":%0d,\"hdump_min\":%0d,\"hdump_max\":%0d,\"tile_cpu_wr\":%0d,\"tile_gfxcs_wr\":%0d,\"tile_ram_we\":%0d,\"pal_cpu_wr\":%0d,\"k052109_cfg\":%0d,\"emitted\":%s}\n",
+                    "{\"schema\":\"escape-kids-native-frame-v1\",\"frame\":%0d,\"width\":%0d,\"height\":%0d,\"hash\":%0d,\"nonblack\":%0d,\"hld\":%0d,\"vld\":%0d,\"vdump_min\":%0d,\"vdump_max\":%0d,\"vdump_steps\":%0d,\"hdump_min\":%0d,\"hdump_max\":%0d,\"tile_cpu_wr\":%0d,\"tile_gfxcs_wr\":%0d,\"tile_ram_we\":%0d,\"pal_cpu_wr\":%0d,\"k052109_cfg\":%0d,\"cpu_pc\":%0d,\"emitted\":%s}\n",
                     frame_ord, frame_w, frame_h, frame_hash, frame_nonblack,
                     frame_hld, frame_vld, frame_vmin, frame_vmax, frame_vsteps,
                     frame_hmin, frame_hmax,
                     tile_cpu_wr, tile_gfxcs_wr, tile_ram_we, pal_cpu_wr,
                     dut.u_game.u_video.u_scroll.u_tilemap.cfg,
+                    dut.u_game.u_main.u_cpu.pc,
                     (frame_ord >= frame_first && frame_ord <= frame_last &&
                      ((frame_ord - frame_first) % frame_stride) == 0) ? "true" : "false");
         end
@@ -733,7 +745,7 @@ module tb_escape_kids_full_smoke;
         reg [7:0] tdata;
         reg [3:0] tdevice;
         begin
-            if (trace_enabled && !rst &&
+            if (trace_enabled && !rst && frame_ord >= trace_start_frame &&
                 (trace_limit == 0 || trace_seq < trace_limit) &&
                 dut.u_game.u_main.dtack &&
                 (dut.u_game.u_main.u_cpu.u_memctrl.mem_en || dut.u_game.u_main.cpu_we)) begin
@@ -766,7 +778,7 @@ module tb_escape_kids_full_smoke;
                           dut.u_game.u_main.tilesys_cs ? 2 : 0;
                 if (^tdata === 1'bx)
                     $fwrite(trace_fd,
-                        "{\"schema\":\"mister-bus-jsonl-v1\",\"seq\":%0d,\"cpu\":0,\"event\":\"bus\",\"pc\":%0d,\"rw\":\"%s\",\"address\":%0d,\"data\":0,\"lanes\":1,\"device\":%0d,\"x\":true,\"sample_cpu_we\":%b,\"sample_mem_en\":%b,\"sample_clken\":%b,\"sample_clken2\":%b,\"sample_mem_we\":%b,\"sample_mem_addr\":%0d,\"sample_dtack\":%b,\"sample_stack_busy\":%b,\"sample_psh_dec\":%b,\"sample_fetch\":%b,\"sample_opd\":%b,\"sample_wrq\":%b,\"sample_is_op\":%b,\"sample_mem_busy\":%b}\n",
+                        "{\"schema\":\"mister-bus-jsonl-v1\",\"seq\":%0d,\"cpu\":0,\"event\":\"bus\",\"pc\":%0d,\"rw\":\"%s\",\"address\":%0d,\"data\":0,\"lanes\":1,\"device\":%0d,\"x\":true,\"sample_cpu_we\":%b,\"sample_mem_en\":%b,\"sample_clken\":%b,\"sample_clken2\":%b,\"sample_mem_we\":%b,\"sample_mem_addr\":%0d,\"sample_dtack\":%b,\"sample_stack_busy\":%b,\"sample_psh_dec\":%b,\"sample_fetch\":%b,\"sample_opd\":%b,\"sample_wrq\":%b,\"sample_is_op\":%b,\"sample_mem_busy\":%b,\"cc\":%0d,\"irqn_ff\":%b,\"irqen\":%b,\"irq_mx\":%b,\"dma_bsy\":%b}\n",
                         trace_seq, dut.u_game.u_main.u_cpu.pc,
                         dut.u_game.u_main.cpu_we ? "w" : "r",
                         dut.u_game.u_main.cpu_addr, tdevice,
@@ -783,10 +795,15 @@ module tb_escape_kids_full_smoke;
                         dut.u_game.u_main.u_cpu.opd,
                         dut.u_game.u_main.u_cpu.wrq,
                         dut.u_game.u_main.u_cpu.is_op,
-                        dut.u_game.u_main.u_cpu.mem_busy);
+                        dut.u_game.u_main.u_cpu.mem_busy,
+                        dut.u_game.u_main.u_cpu.cc,
+                        dut.u_game.u_main.irqn_ff,
+                        dut.u_game.u_main.irqen,
+                        dut.u_game.u_main.irq_mx,
+                        dut.u_game.dma_bsy);
                 else
                     $fwrite(trace_fd,
-                        "{\"schema\":\"mister-bus-jsonl-v1\",\"seq\":%0d,\"cpu\":0,\"event\":\"bus\",\"pc\":%0d,\"rw\":\"%s\",\"address\":%0d,\"data\":%0d,\"lanes\":1,\"device\":%0d,\"x\":false,\"sample_cpu_we\":%b,\"sample_mem_en\":%b,\"sample_clken\":%b,\"sample_clken2\":%b,\"sample_mem_we\":%b,\"sample_mem_addr\":%0d,\"sample_dtack\":%b,\"sample_stack_busy\":%b,\"sample_psh_dec\":%b,\"sample_fetch\":%b,\"sample_opd\":%b,\"sample_wrq\":%b,\"sample_is_op\":%b,\"sample_mem_busy\":%b}\n",
+                        "{\"schema\":\"mister-bus-jsonl-v1\",\"seq\":%0d,\"cpu\":0,\"event\":\"bus\",\"pc\":%0d,\"rw\":\"%s\",\"address\":%0d,\"data\":%0d,\"lanes\":1,\"device\":%0d,\"x\":false,\"sample_cpu_we\":%b,\"sample_mem_en\":%b,\"sample_clken\":%b,\"sample_clken2\":%b,\"sample_mem_we\":%b,\"sample_mem_addr\":%0d,\"sample_dtack\":%b,\"sample_stack_busy\":%b,\"sample_psh_dec\":%b,\"sample_fetch\":%b,\"sample_opd\":%b,\"sample_wrq\":%b,\"sample_is_op\":%b,\"sample_mem_busy\":%b,\"cc\":%0d,\"irqn_ff\":%b,\"irqen\":%b,\"irq_mx\":%b,\"dma_bsy\":%b}\n",
                         trace_seq, dut.u_game.u_main.u_cpu.pc,
                         dut.u_game.u_main.cpu_we ? "w" : "r",
                         dut.u_game.u_main.cpu_addr, tdata, tdevice,
@@ -803,7 +820,12 @@ module tb_escape_kids_full_smoke;
                         dut.u_game.u_main.u_cpu.opd,
                         dut.u_game.u_main.u_cpu.wrq,
                         dut.u_game.u_main.u_cpu.is_op,
-                        dut.u_game.u_main.u_cpu.mem_busy);
+                        dut.u_game.u_main.u_cpu.mem_busy,
+                        dut.u_game.u_main.u_cpu.cc,
+                        dut.u_game.u_main.irqn_ff,
+                        dut.u_game.u_main.irqen,
+                        dut.u_game.u_main.irq_mx,
+                        dut.u_game.dma_bsy);
                 trace_seq = trace_seq + 1;
                 trace_prev_addr = dut.u_game.u_main.cpu_addr;
                 trace_prev_write = dut.u_game.u_main.cpu_we;
@@ -1650,6 +1672,8 @@ module tb_escape_kids_full_smoke;
             trace_limit = 0;
         if (!$value$plusargs("SMOKE_TRACE_MIN=%d", trace_min_events))
             trace_min_events = 0;
+        if (!$value$plusargs("SMOKE_TRACE_START_FRAME=%d", trace_start_frame))
+            trace_start_frame = 0;
         if (!$value$plusargs("SMOKE_INPUT_MIN=%d", input_min_reads))
             input_min_reads = 0;
         if ($value$plusargs("SMOKE_INPUT_TRACE=%s", input_trace_file)) begin
