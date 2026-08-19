@@ -147,6 +147,10 @@ module tb_escape_kids_full_smoke;
     integer input_min_reads;
     reg input_scenario;
     reg input_scenario_done;
+    reg coin_scenario;
+    integer coin_frame;
+    integer coin_hold_frames;
+    integer coin_release_frame;
     reg [1023:0] input_trace_file;
     integer input_trace_fd;
     reg input_trace_enabled;
@@ -1098,6 +1102,14 @@ module tb_escape_kids_full_smoke;
                 joystick3 <= 7'h7f;
                 joystick4 <= 7'h7f;
                 service  <= 1'b1;
+            end else if (coin_scenario) begin
+                cab_1p   <= 4'hf;
+                coin     <= 4'hf;
+                joystick1 <= 7'h7f;
+                joystick2 <= 7'h7f;
+                joystick3 <= 7'h7f;
+                joystick4 <= 7'h7f;
+                service  <= 1'b1;
             end
         end else if (service_gate_enabled) begin
             scenario_cycle <= scenario_cycle + 1;
@@ -1218,6 +1230,30 @@ module tb_escape_kids_full_smoke;
                 14000000: input_scenario_done <= 1'b1;
                 default:;
             endcase
+        end else if (coin_scenario) begin
+            // Long-horizon coin-to-gameplay scenario: hold idle through boot
+            // and attract-mode stabilisation, pulse a single P1 coin edge at
+            // a VBlank-frame-counted point (frame counter is the existing
+            // `frames` reg, incremented later this same cycle -- using its
+            // pre-update value here is fine, the coin pulse spans many
+            // frames so a one-cycle skew is immaterial), hold it for
+            // coin_hold_frames frames, then release and go fully idle again
+            // so the DUT free-runs through Konami's character-select
+            // auto-timeout, ticket animation and color-assign screens on its
+            // own, exactly like the MAME reference scenario documented in
+            // .mister/scenario-briefs/coin-to-gameplay.md section 6 (no
+            // Start button on esckids4p; a manual confirm input was not
+            // determined, so this deliberately relies on the timeout path).
+            cab_1p    <= 4'hf;
+            joystick1 <= 7'h7f;
+            joystick2 <= 7'h7f;
+            joystick3 <= 7'h7f;
+            joystick4 <= 7'h7f;
+            service   <= 1'b1;
+            if (frames >= coin_frame && frames < coin_release_frame)
+                coin <= 4'b1110;
+            else
+                coin <= 4'hf;
         end
         if (stack_debug && !rst &&
             (dut.u_game.u_main.cpu_addr == 16'h07ff ||
@@ -1730,6 +1766,12 @@ module tb_escape_kids_full_smoke;
         input_min_reads = 0;
         input_scenario = $test$plusargs("SMOKE_INPUT_SCENARIO");
         input_scenario_done = 1'b0;
+        coin_scenario = $test$plusargs("SMOKE_COIN_SCENARIO");
+        if (!$value$plusargs("SMOKE_COIN_FRAME=%d", coin_frame))
+            coin_frame = 620;
+        if (!$value$plusargs("SMOKE_COIN_HOLD_FRAMES=%d", coin_hold_frames))
+            coin_hold_frames = 10;
+        coin_release_frame = coin_frame + coin_hold_frames;
         input_trace_file = "";
         input_trace_fd = 0;
         input_trace_enabled = 1'b0;
