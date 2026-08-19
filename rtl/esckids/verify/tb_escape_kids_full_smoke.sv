@@ -35,7 +35,26 @@ module tb_escape_kids_full_smoke;
     // holds jtkcpu's active-low irq_n input inactive for the entire run --
     // the self-test sequencer's IRQ-gated screen advance can then never
     // fire, even though irqn_ff/irqen/CC.I are all otherwise correct.
-    reg dip_pause = 1, dip_test = 0, service = 0, tilt = 0;
+    // dip_test/service/tilt are jtframe_joysticks' "game_*" outputs
+    // (jtframe_joysticks.v: "// game signals are active low"; game_test,
+    // game_service and game_tilt all reset to 1 and are computed as
+    // ~key_*, i.e. 1 = idle/not-pressed, 0 = held).  This standalone
+    // harness has no jtframe_joysticks instance and, outside the
+    // service-gate/input-scenario branches (which already drive their own
+    // correct 1'b1 idle value), never assigns these regs past their
+    // declared reset value -- so the declared value IS the steady-state
+    // value for the plain default run.  service was left at its 0
+    // (held/active) reset value for the whole simulated run: jtsimson_main
+    // (esckids branch) folds this bit directly into the eeprom_cs/stsw_cs
+    // reads the CPU polls at boot, so a permanently-held service switch
+    // routes boot into the interactive "MANUAL TEST" self-test menu
+    // instead of MAME's default attract sequence.  A real MiSTer
+    // integration's jtframe_joysticks always presents service=1 (idle)
+    // unless the operator is actually holding the service key, so real
+    // hardware does not exhibit this.  dip_test carries the same active-low
+    // idle=1 convention (unused by the esckids branch today, but corrected
+    // here too for harness fidelity with jtframe_joysticks/jtframe_board).
+    reg dip_pause = 1, dip_test = 1, service = 1, tilt = 0;
     wire dip_flip;
     reg [1:0] dip_fxlevel = 0;
     reg [3:0] gfx_en = 0;
