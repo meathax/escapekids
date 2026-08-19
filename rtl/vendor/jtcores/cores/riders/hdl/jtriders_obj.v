@@ -96,8 +96,48 @@ function [5:0] paroda_conv(input [5:0]x);
     paroda_conv = { x[5], x[3], x[1], x[4], x[2], x[0] };
 endfunction
 
+// jtframe_draw's pxl extraction ( {pxl_data[24],pxl_data[16],pxl_data[8],pxl_data[0]},
+// shifting one bit position per pixel ) expects the donor K053244/5 physical
+// ROM format: 4 separate 1-bit bitplanes, one full byte per plane, 8 pixels
+// per 32-bit fetch. Escape Kids' K053246/053247 pair instead stores sprite
+// tiles PACKED 4bpp (2 pixels per byte, both nibbles complete pixels) per
+// MAME src/mame/konami/k053246_k053247_k055673.cpp
+// k053247_device::device_start() "static const gfx_layout spritelayout":
+//   planeoffset { 0,1,2,3 } (all 4 bitplanes inside one nibble)
+//   xoffset     { 2*4,3*4,0*4,1*4, 6*4,7*4,4*4,5*4, ... } *4-bit nibbles
+//   charincrement 128*8 (128 bytes/tile, matching the esckids linear
+//   code*128 addressing already used above)
+// For one 32-bit fetch (bytes d[7:0]/d[15:8]/d[23:16]/d[31:24] = half a tile
+// row = 8 pixels), the MAME xoffset pattern selects, for pixel s=0..7, the
+// nibble at nibble-index {2,3,0,1,6,7,4,5}[s] (byte pair swapped, nibble
+// order preserved within each byte). This function re-packs those 8 nibbles
+// into the bit-planar layout jtframe_draw natively expects, so downstream
+// hflip/SWAPH pixel-shift logic is unaffected and unmodified.
+function [31:0] gx975_unswizzle(input [31:0] d);
+    reg [3:0] p0,p1,p2,p3,p4,p5,p6,p7;
+    begin
+        p0 = d[11:8];  p1 = d[15:12]; p2 = d[3:0];   p3 = d[7:4];
+        p4 = d[27:24]; p5 = d[31:28]; p6 = d[19:16]; p7 = d[23:20];
+        gx975_unswizzle[7:0]   = {p7[0],p6[0],p5[0],p4[0],p3[0],p2[0],p1[0],p0[0]};
+        gx975_unswizzle[15:8]  = {p7[1],p6[1],p5[1],p4[1],p3[1],p2[1],p1[1],p0[1]};
+        gx975_unswizzle[23:16] = {p7[2],p6[2],p5[2],p4[2],p3[2],p2[2],p1[2],p0[2]};
+        gx975_unswizzle[31:24] = {p7[3],p6[3],p5[3],p4[3],p3[3],p2[3],p1[3],p0[3]};
+    end
+endfunction
+
+wire [31:0] draw_rom_data = esckids ? gx975_unswizzle(rom_data) : rom_data;
+
 assign rom_cs    = ~objcha_n | pre_cs;
+// paroda_conv (with the ysub[3]/H position swap below it) reproduces the
+// K053244/5 zoom-hardware ROM quadrant scramble used by parodius/lgtnfght/
+// simpsons. GX975 (Escape Kids) instead drives a plain K053246/053247 pair
+// (see MAME src/mame/konami/vendetta.cpp "ESCAPE KIDS uses 053246's unknown
+// function" and k053246_k053247_k055673.cpp k053247_device::device_start()
+// spritelayout), whose tile ROM is stored linearly: code*128 + y*8 + H*4
+// bytes, no address-bit scramble. Route esckids straight through with H as
+// the low-order selector instead of applying the donor-chip scramble.
 assign rom_addr  = !objcha_n ? rmrd_addr[21:2] :
+    esckids ? { pre_addr[21:7], pre_addr[5:2], pre_addr[6] } :
     { pre_addr[21], pre_addr[20:13], paroda_conv(pre_addr[12:7]), pre_addr[5], pre_addr[6],  pre_addr[4:2] };
 
 assign cpu_din   = !objcha_n ? rmrd_addr[1] ? rom_data[31:16] : rom_data[15:0] :
@@ -201,7 +241,7 @@ jtframe_objdraw #(
     .rom_addr   ( pre_addr      ),
     .rom_cs     ( pre_cs        ),
     .rom_ok     ( rom_ok        ),
-    .rom_data   ( rom_data      ),
+    .rom_data   ( draw_rom_data ),
 
     .pxl        ( pre_pxl       )
 );
