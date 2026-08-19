@@ -124,6 +124,7 @@ jt053244_scan #(.HFLIP_OFFSET(HFLIP_OFFSET), .GX975(GX975)
     .dr_busy   ( dr_busy    ),
     .debug_bus ( debug_bus  )
     ,.gx975     ( gx975_en   )
+    ,.gx975_raw ( gx975      )
 );
 
 jt053246_dma u_dma(

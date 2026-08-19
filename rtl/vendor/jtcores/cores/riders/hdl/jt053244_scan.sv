@@ -52,6 +52,7 @@
     output reg        dr_start,
     input             dr_busy,
     input             gx975,
+    input             gx975_raw,  // strap only, not gated by cfg[3]
 
     // Debug
     input      [ 7:0] debug_bus
@@ -76,6 +77,10 @@ wire [ 9:0] hflip_off;
 wire [ 1:0] nx_mir, hsz, vsz;
 wire        last_obj;
 wire        gx975_path = GX975 && gx975;
+// Strap-only Escape Kids selector.  The 053246 sprite-table size and the
+// display-window offset polarity are wiring properties of the chip pair, not
+// of the runtime OBJSET1 bit, so they must not follow cfg[3].
+wire        gx975_hw   = GX975 && gx975_raw;
 wire [ 9:0] gx_ox_half = {1'b0,scan_odd[9:1]} + 10'd1;
 wire [10:0] gx_ox_flip = {1'b0,gx_ox_half} + SCREEN_WIDTH;
 wire [ 9:0] x_start = gx975_path ?
@@ -97,7 +102,13 @@ assign hflip_off = ghf ? HFLIP_OFFSET[9:0] : 0;
 always @(negedge clk) cen2 <= ~cen2;
 
 always @(posedge clk) begin
-    xadj <= xoffset + 10'h66 + hflip_off;
+    // MAME subtracts the 053246 display-window X offset (ox-offx) before
+    // applying the per-game dx.  The k44 donor path adds it, which stayed
+    // invisible while every donor game wrote offx==0.  jtcores' own 053246
+    // scanner (cores/simson/hdl/jt053246_scan.sv) subtracts.  110 = the
+    // shared jtframe_objdraw pipeline constant 105 plus MAME's esckids dx=5.
+    xadj <= gx975_hw ? (10'd110 - xoffset + hflip_off)
+                     : (xoffset + 10'h66 + hflip_off);
     yadj <= yoffset + 10'h107;
     hscl <= rd_pzoffset(hzoom);
     /* verilator lint_off WIDTH */
