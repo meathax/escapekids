@@ -25,6 +25,9 @@ module jt053246_dma(
     input             dma_en,
     input             dma_trig,
     input             k44_en,   // enable k053244/5 mode (default k053246/7)
+    input             lut256,   // k44 mode only: scan the full 256-entry table
+                                // (GX975 Escape Kids uses a 053246-style
+                                // 256-entry LUT with the k44 register set)
     input             simson,
 
     input             hs,
@@ -135,7 +138,7 @@ always @(posedge clk) begin
             dma_bufa[ 3:1] <= dma_addr[3:1];
             if( dma_addr[3:1]==6 ) begin
                 dma_addr[12:1] <= dma_addr[12:1] + 12'd2; // skip 7
-                dma_bsy <= !(&dma_addr[10:2] && (k44_en || &dma_addr[12:11]));
+                dma_bsy <= !(&dma_addr[10:2] && ((k44_en && (dma_addr[11] || !lut256)) || &dma_addr[12:11]));
             end
         end
     end

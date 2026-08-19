@@ -142,6 +142,7 @@ jt053246_dma #(
     .dma_en     ( dma_en    ),
     .dma_trig   ( 1'b0      ),
     .k44_en     ( 1'b0      ),   // enable k053244/5 mode (default k053246/7)
+    .lut256     ( 1'b0      ),   // k44-mode-only strap; unused when k44_en=0
     .simson     ( simson    ),
 
     .hs         ( hs        ),
