@@ -141,6 +141,11 @@ module tb_escape_kids_full_smoke;
     integer trace_stale_drop_count;
     integer max_cycles;
     integer scenario_cycle;
+    // Free-running diagnostic cycle counter, valid across every scenario
+    // mode (coin_scenario included, which does not advance scenario_cycle).
+    // Observation-only: never read by PASS/FAIL gate logic, only by trace
+    // emission below.
+    longint unsigned diag_cycle_count;
     integer input_trace_seq;
     integer input_reads;
     integer input_edges;
@@ -154,6 +159,17 @@ module tb_escape_kids_full_smoke;
     reg [1023:0] input_trace_file;
     integer input_trace_fd;
     reg input_trace_enabled;
+    // Diagnostic-only work-RAM byte watch: passively observes CPU accesses
+    // to one WRAM address (default 0x0002, the confirmed MAME character-
+    // select state byte) and logs an edge whenever the value changes.
+    // Never forces the bus, never gates PASS/FAIL.
+    reg [1023:0] wram_trace_file;
+    integer wram_trace_fd;
+    reg wram_trace_enabled;
+    integer wram_watch_addr;
+    reg [7:0] wram_watch_last;
+    reg wram_watch_valid;
+    integer wram_trace_seq;
     reg [1023:0] service_gate_scenario;
     reg [2047:0] service_gate_trace_file;
     reg [2047:0] service_gate_final_file;
@@ -1081,6 +1097,7 @@ module tb_escape_kids_full_smoke;
         // start to the corresponding coin controls, while Japan uses the
         // cab_1p[1:0] start bits and keeps P3/P4 inactive.
         if (rst) begin
+            diag_cycle_count <= 0;
             scenario_cycle <= 0;
             input_scenario_done <= 1'b0;
             buserror_seen = 0;
@@ -1250,11 +1267,26 @@ module tb_escape_kids_full_smoke;
             joystick3 <= 7'h7f;
             joystick4 <= 7'h7f;
             service   <= 1'b1;
-            if (frames >= coin_frame && frames < coin_release_frame)
+            // Gate on lvbl_falls (a genuine once-per-real-video-frame,
+            // edge-detected counter, unconditionally maintained a few lines
+            // below and NOT gated behind -FrameDir), not the legacy `frames`
+            // reg.  `frames` (line ~1291, `!rst && !LVBL && HS`) is a level
+            // check evaluated every clock, so it increments many times per
+            // real video frame instead of once -- confirmed empirically this
+            // session (SMOKE_WRAM_TRACE showed `frames` already past 67000
+            // within the first ~13 real frames).  That mismatch meant
+            // CoinFrame/CoinHoldFrames fired within the first real frame or
+            // two after reset, not at the intended Nth displayed frame, for
+            // every prior coin_scenario run this investigation used.  Using
+            // lvbl_falls makes CoinFrame/CoinHoldFrames mean what the
+            // scenario brief and CLI flags document: real displayed frames.
+            if (lvbl_falls >= coin_frame && lvbl_falls < coin_release_frame)
                 coin <= 4'b1110;
             else
                 coin <= 4'hf;
         end
+        if (!rst)
+            diag_cycle_count <= diag_cycle_count + 1;
         if (stack_debug && !rst &&
             (dut.u_game.u_main.cpu_addr == 16'h07ff ||
              dut.u_game.u_main.u_cpu.u_memctrl.addr == 16'h07ff))
@@ -1291,6 +1323,26 @@ module tb_escape_kids_full_smoke;
             dut.main_addr[12:0] !== dut.u_game.u_main.cpu_addr[12:0])
             $fatal(1,"Accepted work RAM address mismatch bram=%04h cpu=%04h",
                 dut.main_addr[12:0],dut.u_game.u_main.cpu_addr[12:0]);
+        // Diagnostic-only WRAM byte watch (see wram_trace_enabled declaration):
+        // passively observes accepted CPU work-RAM cycles at wram_watch_addr
+        // and emits an edge line whenever the byte value changes.  Read-only
+        // tap, no bus forcing, cannot affect PASS/FAIL.
+        if (wram_trace_enabled && !rst && dut.u_game.u_main.ram_cs &&
+            dut.u_game.u_main.u_cpu.cen_out && dut.u_game.u_main.dtack &&
+            dut.main_addr[12:0] == wram_watch_addr[12:0]) begin
+            reg [7:0] wram_watch_now;
+            wram_watch_now = dut.u_game.u_main.cpu_we ?
+                dut.u_game.u_main.cpu_dout : dut.u_game.u_main.cpu_din;
+            if (!wram_watch_valid || wram_watch_now !== wram_watch_last) begin
+                $fwrite(wram_trace_fd,
+                    "{\"schema\":\"mister-wram-jsonl-v1\",\"seq\":%0d,\"event\":\"wram_edge\",\"cycle\":%0d,\"frame\":%0d,\"address\":%0d,\"value\":%0d,\"write\":%0d}\n",
+                    wram_trace_seq, diag_cycle_count, lvbl_falls, wram_watch_addr,
+                    wram_watch_now, dut.u_game.u_main.cpu_we);
+                wram_trace_seq <= wram_trace_seq + 1;
+                wram_watch_last <= wram_watch_now;
+                wram_watch_valid <= 1'b1;
+            end
+        end
         if (input_trace_enabled && !rst && dut.u_game.u_main.u_cpu.cen_out &&
             dut.u_game.u_main.dtack && !dut.u_game.u_main.cpu_we &&
             ((dut.u_game.u_main.cpu_addr >= 16'h3f80 &&
@@ -1299,7 +1351,7 @@ module tb_escape_kids_full_smoke;
              dut.u_game.u_main.cpu_addr == 16'h3f93)) begin
             $fwrite(input_trace_fd,
                 "{\"schema\":\"mister-input-jsonl-v1\",\"seq\":%0d,\"event\":\"input_read\",\"cycle\":%0d,\"address\":%0d,\"data\":%0d,\"cab_1p\":%0d,\"coin\":%0d,\"joystick1\":%0d,\"joystick2\":%0d,\"joystick3\":%0d,\"joystick4\":%0d,\"service\":%0d}\n",
-                input_trace_seq, scenario_cycle, dut.u_game.u_main.cpu_addr,
+                input_trace_seq, diag_cycle_count, dut.u_game.u_main.cpu_addr,
                 dut.u_game.u_main.cpu_din, cab_1p, coin, joystick1,
                 joystick2, joystick3, joystick4, service);
             input_trace_seq <= input_trace_seq + 1;
@@ -1440,6 +1492,10 @@ module tb_escape_kids_full_smoke;
             if (input_trace_enabled) begin
                 $fclose(input_trace_fd);
                 input_trace_enabled = 1'b0;
+            end
+            if (wram_trace_enabled) begin
+                $fclose(wram_trace_fd);
+                wram_trace_enabled = 1'b0;
             end
             if (dma_trace_enabled && dma_trace_fd != 0) begin
                 $fclose(dma_trace_fd);
@@ -1775,6 +1831,8 @@ module tb_escape_kids_full_smoke;
         input_trace_file = "";
         input_trace_fd = 0;
         input_trace_enabled = 1'b0;
+        wram_trace_fd = 0;
+        wram_trace_enabled = 1'b0;
         service_gate_scenario = "";
         service_gate_trace_file = "";
         service_gate_final_file = "";
@@ -1913,6 +1971,16 @@ module tb_escape_kids_full_smoke;
             if (input_trace_fd == 0)
                 $fatal(1, "Cannot open smoke input trace %0s", input_trace_file);
             input_trace_enabled = 1'b1;
+        end
+        wram_watch_addr = 16'h0002;
+        if ($value$plusargs("SMOKE_WRAM_ADDR=%d", wram_watch_addr)) ;
+        if ($value$plusargs("SMOKE_WRAM_TRACE=%s", wram_trace_file)) begin
+            wram_trace_fd = $fopen(wram_trace_file, "w");
+            if (wram_trace_fd == 0)
+                $fatal(1, "Cannot open smoke WRAM trace %0s", wram_trace_file);
+            wram_trace_enabled = 1'b1;
+            wram_watch_valid = 1'b0;
+            wram_trace_seq = 0;
         end
         if ($value$plusargs("SMOKE_SERVICE_GATE_SCENARIO=%s", service_gate_scenario)) begin
             service_gate_enabled = 1'b1;
