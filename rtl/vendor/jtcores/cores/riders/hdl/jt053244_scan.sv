@@ -94,7 +94,18 @@ assign hflip     = (ghf ^ pre_hf)&!hmir | hmir_eff;
 assign scan_addr = { scan_obj, scan_sub };
 assign ysub      = ydiff[3:0];
 assign last_obj  = &scan_obj[6:0];
-assign nx_mir    = scan_even[9:8];
+// Donor 053244/5 (parodius/lgtnfght/tmnt2) keeps its real mirror-y/mirror-x
+// bits at word6[9:8]. Escape Kids (GX975) is wired to a real 053246/053247
+// pair instead: MAME's own k053246_k053247_k055673.cpp sprite-format table
+// documents word6[15]=mirror y, word6[14]=mirror x for that chip, with
+// word6[9:8] instead being a game-dependent "effect code" (palette bank /
+// shadow select) unrelated to mirroring. Live esckids OBJ RAM captures
+// confirm this: word6[15:14] is always 0 across every active sprite sampled,
+// while word6[9:8] is frequently nonzero (e.g. code 0x5240/0x3340-0x33a0).
+// Reading mirror from [9:8] on the GX975 path therefore mistakes ordinary
+// effect-code data for a mirror-x/y request, forcing hflip to track hhalf
+// instead of each sprite's own independent word0[12] flip-x bit.
+assign nx_mir    = gx975_path ? scan_even[15:14] : scan_even[9:8];
 assign {vsz,hsz} = size;
 assign hflip_off = ghf ? HFLIP_OFFSET[9:0] : 0;
 
