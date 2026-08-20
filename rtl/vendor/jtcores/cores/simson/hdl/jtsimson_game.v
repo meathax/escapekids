@@ -25,7 +25,7 @@ wire [ 7:0] snd2main, video_dump, fm_dout;
 wire        cpu_cen, snd_irq, rmrd, rst8, init;
 wire        pal_we, pal_bank, fm_irqn,
             cpu_we, tilesys_cs, objsys_cs, pcu_cs, objcha_n;
-wire        cpu_rnw, cpu_irqn, dma_bsy, snd_wrn, mono, objreg_cs, main_fmcs;
+wire        cpu_rnw, cpu_irqn, cpu_firqn, cpu_nmin, dma_bsy, snd_wrn, mono, objreg_cs, main_fmcs;
 wire        video_bank, k053252_cs;
 wire [ 7:0] k053252_dout;
 wire [ 7:0] tilesys_dout, objsys_dout,
@@ -385,6 +385,8 @@ jtsimson_video #(
     .rmrd           ( rmrd          ),
     .objcha_n       ( objcha_n      ),
     .cpu_irqn       ( cpu_irqn      ),
+    .cpu_firqn      ( cpu_firqn     ),
+    .cpu_nmin       ( cpu_nmin      ),
     .dma_bsy        ( dma_bsy       ),
 
     // SDRAM
