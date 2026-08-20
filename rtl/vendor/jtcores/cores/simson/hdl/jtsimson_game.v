@@ -112,12 +112,29 @@ escape_kids_auto_run u_auto_run(
 always @(posedge clk48) begin
     if( !rst48 && !main_cs && main_addr[12:0] !== ram_addr )
         $error("Work RAM address bridge mismatch ram=%04h main=%04h",ram_addr,main_addr[12:0]);
-    if( !rst48 && esckids && |(pcm_bsy & ~pcm_bsy_d) &&
-        (pcm_schedule_a !== pcm_start_a ||
-         pcm_schedule_b !== pcm_start_b ||
-         pcm_schedule_c !== pcm_start_c ||
-         pcm_schedule_d !== pcm_start_d) )
-        $error("PCM keyon schedule left programmed start before address phase settled");
+    // Check each channel's own schedule/start relationship against its own
+    // keyon edge only. The four PCM channels are independent (separate MMR
+    // start-address registers per K053260 channel; schematic p8/p20 show no
+    // shared bsy/address gating across channels). A channel that is already
+    // mid-playback naturally has schedule==raw_addr while its own start
+    // register can independently hold a different (already-advanced, or
+    // already-reprogrammed-for-next-sound) address; that mismatch is normal
+    // and must not be blamed on a different channel's unrelated keyon edge.
+    // Regression coverage before this fix only ever key-on'd all four
+    // channels in the same cycle (single 0x0F write to reg 0x28), so the
+    // any-channel-OR/check-all-channels form never saw a staggered keyon
+    // while a sibling channel was already playing; real gameplay audio
+    // (background loop + independent one-shot SFX) does exactly that.
+    if( !rst48 && esckids ) begin
+        if( pcm_bsy[0] && !pcm_bsy_d[0] && pcm_schedule_a !== pcm_start_a )
+            $error("PCM keyon schedule left programmed start before address phase settled (ch A)");
+        if( pcm_bsy[1] && !pcm_bsy_d[1] && pcm_schedule_b !== pcm_start_b )
+            $error("PCM keyon schedule left programmed start before address phase settled (ch B)");
+        if( pcm_bsy[2] && !pcm_bsy_d[2] && pcm_schedule_c !== pcm_start_c )
+            $error("PCM keyon schedule left programmed start before address phase settled (ch C)");
+        if( pcm_bsy[3] && !pcm_bsy_d[3] && pcm_schedule_d !== pcm_start_d )
+            $error("PCM keyon schedule left programmed start before address phase settled (ch D)");
+    end
 end
 `endif
 
