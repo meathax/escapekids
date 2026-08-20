@@ -1,8 +1,0 @@
-start
-maincpu ok
-space ok
-tap installed
-W addr=3D80 data=10
-W addr=3D80 data=00
-SUMMARY regpage_writes=2 firq_enable_writes=0
-FIRQ_ENABLE_NEVER_SET

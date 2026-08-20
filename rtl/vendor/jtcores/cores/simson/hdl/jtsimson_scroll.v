@@ -115,11 +115,7 @@ always @(posedge clk) begin
                 esc_vdump <= esc_vdump==9'h1ff ? 9'h0f8 : esc_vdump+1'b1;
             esc_vld_pending <= 1'b0;
         end else begin
-            // Guard the boot window and hcnt_dis: the K053252 resets to
-            // hcnt0=0x300 (769px/line) until the CPU programs regs 0/1, so
-            // HLD can arrive late.  Wrap at the K051962 domain end instead of
-            // rolling 0x1FF->0x000 and emitting out-of-range columns.
-            esc_hdump <= esc_hdump==9'h19f ? 9'h020 : esc_hdump+1'b1;
+            esc_hdump <= esc_hdump+1'b1;
         end
     end
 end
