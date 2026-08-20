@@ -60,6 +60,8 @@ module jtsimson_video #(
     input             rmrd,     // Tile ROM read mode
     input             objcha_n, // object ROM read mode
     output            cpu_irqn,
+    output            cpu_firqn,
+    output            cpu_nmin,
     output            dma_bsy,
 
     // Tile ROMs
@@ -213,8 +215,8 @@ jtsimson_scroll #(.HB_OFFSET(2),.EXT_TIMING(EXT_TIMING)) u_scroll(
     .vrender1   ( vrender1  ),
 
     .irq_n      ( cpu_irqn  ),
-    .firq_n     (           ),
-    .nmi_n      (           ),
+    .firq_n     ( cpu_firqn ),
+    .nmi_n      ( cpu_nmin  ),
     .flip       ( flip      ),
 
 
