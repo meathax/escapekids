@@ -327,8 +327,15 @@ jtriders_obj #(
 );
 
 function [6:0] lyrcol( input [7:0] pxl );
-    lyrcol = parsur ? {       pxl[7:5], pxl[3:0] } :
-                      { 1'b0, pxl[7:6], pxl[3:0] };
+    // MAME konami/vendetta.cpp K052109_CB_MEMBER: vendetta_tile_callback uses
+    // a 2-bit color code (color&0xc0)>>6, but esckids_tile_callback (the
+    // callback actually bound for Escape Kids, vendetta.cpp:207-210) uses a
+    // 3-bit color code (color&0xe0)>>5 -- one more attribute bit feeds the
+    // palette group select than in the generic/Vendetta case. Route esckids
+    // through the same 3-bit extraction already used for parsur (Parodius/
+    // Surprise Attack), instead of the 2-bit Vendetta-style path.
+    lyrcol = (parsur | esckids) ? {       pxl[7:5], pxl[3:0] } :
+                                  { 1'b0, pxl[7:6], pxl[3:0] };
 endfunction
 
 // scroll layers swapped in Parodius/Surprise Attack
