@@ -139,7 +139,18 @@ module tb_escape_kids_full_smoke;
     reg [15:0] trace_prev_addr;
     reg trace_prev_write;
     integer trace_stale_drop_count;
-    integer max_cycles;
+    // longint (64-bit): a plain 32-bit `integer` caps SMOKE_CYCLES near
+    // 2.147e9, which this project's own deep-scenario evidence showed is
+    // insufficient to reach native video frame ~3400 (2.1e9 cycles only
+    // bought 2588 frames before the watchdog fired at
+    // tb_escape_kids_full_smoke.sv:2115). Verification-only widening, no
+    // synthesizable RTL touched.
+    longint max_cycles;
+    // Kept well under Verilator's known-safe 2^31-1 single-repeat-count
+    // limit so `repeat (SMOKE_CYCLE_CHUNK) @(posedge clk);` never truncates.
+    localparam longint SMOKE_CYCLE_CHUNK = 64'd1_000_000_000;
+    longint cyc_chunks;
+    longint cyc_remainder;
     integer scenario_cycle;
     // Free-running diagnostic cycle counter, valid across every scenario
     // mode (coin_scenario included, which does not advance scenario_cycle).
@@ -1959,6 +1970,7 @@ module tb_escape_kids_full_smoke;
             media_file = ".mister/mame/main.hex";
         if (!$value$plusargs("SMOKE_CYCLES=%d", max_cycles))
             max_cycles = 5000;
+        $display("ESCAPE KIDS SMOKE_CYCLES_PARSED max_cycles=%0d", max_cycles);
         if (!$value$plusargs("SMOKE_BARRIER=%s", smoke_barrier))
             smoke_barrier = "cpu_sound";
         if (!$value$plusargs("SMOKE_CABINET_2P=%d", smoke_cabinet_2p))
@@ -2099,7 +2111,29 @@ module tb_escape_kids_full_smoke;
         rst24 <= 1'b0;
         rst48 <= 1'b0;
         rst96 <= 1'b0;
-        repeat (max_cycles) @(posedge clk);
+        // Not a bare `repeat (max_cycles)`: Verilator's repeat-count
+        // implementation truncates a longint expression to 32 bits
+        // internally, so any SMOKE_CYCLES value above 2^32 silently wraps
+        // (measured: requesting 6,000,000,000 actually ran only
+        // 1,705,032,704 cycles == 6e9 mod 2^32, landing the deep coin400
+        // capture 487 native frames short of its target).
+        //
+        // A single explicit `for (cyc_i=0; cyc_i<max_cycles; ...)
+        // @(posedge clk);` loop was tried and measured to change behavior:
+        // it desynchronized the concurrent raster/service-gate completion
+        // checkers from this main sequencer (regression ladder went from
+        // full_smoke_pass/service_gate_pass/raster_pass to
+        // timeout_or_failure on every "frame"-barrier lane, both sets).
+        // Root cause not pinned down, so instead of an unproven equivalent
+        // construct, nested `repeat` is used: each individual repeat count
+        // stays under 2^31-1 (Verilator's known-safe range) by chunking, so
+        // every repeat call site keeps the exact original, already-proven
+        // `repeat (N) @(posedge clk);` scheduling behavior; only the
+        // chunk/remainder bookkeeping is new.
+        cyc_chunks    = max_cycles / SMOKE_CYCLE_CHUNK;
+        cyc_remainder = max_cycles % SMOKE_CYCLE_CHUNK;
+        repeat (cyc_chunks) repeat (SMOKE_CYCLE_CHUNK) @(posedge clk);
+        repeat (cyc_remainder) @(posedge clk);
         if (service_gate_enabled)
             service_gate_finalize(1'b0, "timeout before target");
         if (raster_enabled)
