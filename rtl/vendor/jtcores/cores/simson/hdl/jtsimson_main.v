@@ -60,8 +60,6 @@ module jtsimson_main(
     input               rst8,
     input               LVBL,
     input               irq_n,  // from tile map
-    input               cpu_firqn,  // from K052109
-    input               cpu_nmin,   // from K052109
     input               dma_bsy,
 
     input      [7:0]    tilesys_dout, objsys_dout,
@@ -125,7 +123,7 @@ assign pal_we  = pal_cs & cpu_we;
 assign cab_rd  = joystk_cs|eeprom_cs|stsw_cs|(io_cs&(paroda|suratk));
 assign cpu_addr= A[15:0];
 assign ram_addr= A[12:0];
-assign firqn   = esckids ? cpu_firqn : (suratk ? fm_irqn : firqn_ff);
+assign firqn   = suratk ? fm_irqn : firqn_ff;
 
 always @(*) begin
     case( debug_bus[1:0] )
@@ -309,7 +307,7 @@ always @(*) begin
         // GX975 Escape Kids map.  Video-bank views are exclusive with the
         // corresponding K052109 window, matching vendetta.cpp:405-436.
         ram_cs      = A[15:13]==3'b000;
-        banked_cs   = !cpu_we && A[15:13]==3'b011;  // ROM reads only; writes access K052109 config
+        banked_cs   = A[15:13]==3'b011;
         prog_cs     = A[15];
         tilesys_cs  = A>=16'h2000 && A<=16'h5fff;
         objsys_cs   = video_bank && A[15:12]==4'h2;
