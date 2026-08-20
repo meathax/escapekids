@@ -153,6 +153,7 @@ module tb_escape_kids_full_smoke;
     reg input_scenario;
     reg input_scenario_done;
     reg coin_scenario;
+    reg [3:0] coin_prev;
     integer coin_frame;
     integer coin_hold_frames;
     integer coin_release_frame;
@@ -1122,6 +1123,7 @@ module tb_escape_kids_full_smoke;
             end else if (coin_scenario) begin
                 cab_1p   <= 4'hf;
                 coin     <= 4'hf;
+                coin_prev <= 4'hf;
                 joystick1 <= 7'h7f;
                 joystick2 <= 7'h7f;
                 joystick3 <= 7'h7f;
@@ -1284,6 +1286,15 @@ module tb_escape_kids_full_smoke;
                 coin <= 4'b1110;
             else
                 coin <= 4'hf;
+            // Prove at the DUT port that the scripted pulse actually
+            // asserted, independent of whether the CPU ever samples it.
+            // Diagnostic-only, emitted at most twice per run.
+            if (input_trace_enabled && coin !== coin_prev)
+                $fwrite(input_trace_fd,
+                    "{\"schema\":\"mister-input-jsonl-v1\",\"seq\":%0d,\"event\":\"coin_port_edge\",\"cycle\":%0d,\"frame\":%0d,\"coin\":%0d}\n",
+                    input_trace_seq, diag_cycle_count, lvbl_falls, coin);
+            if (coin !== coin_prev) input_trace_seq <= input_trace_seq + 1;
+            coin_prev <= coin;
         end
         if (!rst)
             diag_cycle_count <= diag_cycle_count + 1;
