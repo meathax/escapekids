@@ -1,0 +1,5 @@
+Service Mode | port=:EEPROM | mask=0x4 | defvalue=0x4 | type=36 | live=0xFFFFFFFFFFFFFFFF
+Service 4 | port=:SERVICE | mask=0x80 | defvalue=0x80 | type=33 | live=0xFFFFFFFFFFFFFFFF
+Service 2 | port=:SERVICE | mask=0x20 | defvalue=0x20 | type=31 | live=0xFFFFFFFFFFFFFFFF
+Service 1 | port=:SERVICE | mask=0x10 | defvalue=0x10 | type=30 | live=0xFFFFFFFFFFFFFFFF
+Service 3 | port=:SERVICE | mask=0x40 | defvalue=0x40 | type=32 | live=0xFFFFFFFFFFFFFFFF

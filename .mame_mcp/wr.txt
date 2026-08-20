@@ -1,0 +1,10 @@
+0780 count 1
+3800 count 1
+3A00 count 2
+3C80 count 1
+3D80 count 1
+3F00 count 1
+3F80 count 104
+5800 count 1
+5A00 count 2
+7C00 count 1

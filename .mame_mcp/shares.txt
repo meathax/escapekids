@@ -1,0 +1,22 @@
+share :palette size=4096 width=8
+share :spriteram size=4096 width=8
+region :eeprom size=128
+region :k053260 size=1048576
+region :k053246 size=4194304
+region :k052109 size=1048576
+region :audiocpu size=65536
+region :maincpu size=131072
+dev :
+dev :maincpu
+dev :audiocpu
+dev :eeprom
+dev :watchdog
+dev :screen
+dev :palette
+dev :k052109
+dev :k053246
+dev :k053251
+dev :speaker
+dev :ymsnd
+dev :k053260
+dev :k053252
