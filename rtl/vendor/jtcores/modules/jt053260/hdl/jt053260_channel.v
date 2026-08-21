@@ -79,7 +79,8 @@ assign svr          = {1'b0, vol_r[13-:7]};
 assign mul_l        = pre_snd * svl;
 assign mul_r        = pre_snd * svr;
 assign match        = cnt == length;
-assign neg_cnt      = -{5'd0,cnt};
+// Reverse playback pre-decrement: -(cnt+1) == ~cnt
+assign neg_cnt      = ~{5'd0,cnt};
 
 always @* begin
     case ( nibble )
@@ -122,8 +123,17 @@ always @(posedge clk) begin
     end
 end
 
+// The real chip pre-increments the sample position: playback starts one
+// byte after the programmed start address.  The Simpsons/Vendetta-family
+// sound ROM headers list start addresses one greater than the values the
+// CPU writes to the registers, and starting at +0 gives ADPCM sounds a DC
+// offset or overflow distortion (MAME k053260.cpp KDSC_Voice::play).
+// The CPU test-read path (register 0x2E) post-increments instead, so ROM
+// readback still begins at start+0 (MAME KDSC_Voice::read_rom).
 always @(posedge clk) begin
-    rom_addr <= start + (swap ? neg_cnt : {5'd0,cnt});
+    rom_addr <= start + (tst_mode ? {5'd0,cnt}       :
+                         swap     ? neg_cnt          :
+                                    ({5'd0,cnt}+21'd1));
 end
 
 always @* begin
