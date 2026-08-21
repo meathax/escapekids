@@ -184,7 +184,16 @@ always @(posedge clk) begin
                             end
                         end
                     end
-                    pre_snd <= adpcm_en ? adpcm_lim : rom_data;
+                    // On a loop wrap the hardware restarts with a cleared
+                    // sample register (MAME: m_position = m_output = 0).
+                    // Without this, residual DC left by one pass of a looped
+                    // ADPCM sample accumulates on every pass until the
+                    // accumulator saturates and the channel degenerates into
+                    // loud clipped noise after some minutes of play.
+                    if( match && loop && (!adpcm_cnt || !adpcm_en) )
+                        pre_snd <= 0;
+                    else
+                        pre_snd <= adpcm_en ? adpcm_lim : rom_data;
                 end
             end
         end
