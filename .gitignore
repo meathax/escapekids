@@ -49,6 +49,27 @@ roms/**/*.nv
 cfg/
 nvram/
 snap/
+sta/
+
+# MiSTer/Quartus generated bitstreams -- only the curated releases/ RBF ships.
+*.rbf
+!/releases/*.rbf
+!/releases/**/*.rbf
+
+# Secondary/experimental Quartus project variant -- not part of the public core.
+EscapeKids_Q13.*
+
+# Simulation runtime dumps and one-off captures left in the repo root.
+cfgstr.hex
+jt51.raw
+jt51_cmd.txt
+obj.bin
+pal.bin
+scr0.bin
+scr1.bin
+ccu_writes.log
+eeprom_ioport_dump.txt
+jtag.cdf
 
 # Disposable focused simulation outputs.
 .mister/*.vvp
@@ -56,3 +77,14 @@ snap/
 .mister/__pycache__/
 .mister/mame/
 .mister/mra-media/
+
+# AI-assisted development session material: differential-debug evidence,
+# hardware-evidence PDFs/video, MAME MCP scripts/logs, agent scratch state.
+# None of this is part of the publishable core (matches the SVV/S32MULTIONLY
+# template repos) -- keep it local only, never push it.
+.mister/
+.mame_mcp/
+.mame_mcp_vrender/
+.codex-mister-build/
+docs/
+reference/
