@@ -97,7 +97,21 @@ module jtsimson_main(
     input       [23:0]  dipsw,          // used by Parodius
     // Debug
     input       [ 7:0]  debug_bus,
-    output reg  [ 7:0]  st_dout
+    output reg  [ 7:0]  st_dout,
+
+    // TEMPORARY hardware bring-up diagnostic taps (Escape Kids boot
+    // black-screen). Additive, read-only exports of signals that already
+    // exist inside this module; no functional behaviour changed. Remove
+    // this whole port group (and its two connection points below) before a
+    // release build - search for "dbg_" in this file.
+    output               dbg_berr_l,   // sticky: CPU permanently halted by a
+                                        // latched bus-error (illegal opcode
+                                        // trap from the jtkcpu ucode)
+    output               dbg_dtack,    // live: (~rom_cs|rom_ok)&tilesys_rom_dtack
+    output               dbg_eep_rdy,  // live: EEPROM ready line
+    output      [15:0]   dbg_pcbad,    // sticky: PC latched at the trap
+    output      [ 7:0]   dbg_aupper    // live: jtkcpu's own bank/page
+                                        // register (addr[23:16] from the CPU)
 );
 `ifndef NOMAIN
 
@@ -119,6 +133,11 @@ reg         eep_di, eep_clk, eep_cs, irqen, firqen, WOC1, WOC0,
             bankr;
 
 assign dtack   = (~rom_cs | rom_ok) & tilesys_rom_dtack;
+assign dbg_berr_l  = berr_l;   // TEMPORARY diagnostic taps - see port list above
+assign dbg_dtack   = dtack;
+assign dbg_eep_rdy = eep_rdy;
+assign dbg_pcbad   = pcbad;
+assign dbg_aupper  = Aupper;
 assign ram_we  = ram_cs & cpu_we;
 assign snd_wrn = suratk ? ~cpu_we : ~(snd_cs & cpu_we);
 assign pal_we  = pal_cs & cpu_we;
