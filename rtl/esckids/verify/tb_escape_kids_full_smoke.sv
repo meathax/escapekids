@@ -849,6 +849,8 @@ module tb_escape_kids_full_smoke;
     task automatic frame_dump_ram;
         integer fd, k;
         reg [2047:0] path;
+        reg [2047:0] mmr_path;
+        integer mmr_fd;
         begin
             $sformat(path, "%0s/vram_%05d.bin", frame_dir, frame_ord);
             fd = $fopen(path, "wb");
@@ -863,6 +865,20 @@ module tb_escape_kids_full_smoke;
                     $fwrite(fd, "%c",
                         dut.u_game.u_video.u_colmix.u_ram.u_dual.u_ram.mem[k]);
                 $fclose(fd);
+            end
+            // Additive debug dump: K053251 (jtcolmix_053251) internal mmr[0:12]
+            // register file, one byte per register (6 significant bits each).
+            // Used to compare the color-mixer's live colorbase-select register
+            // state against MAME's k053251_device internal register array at
+            // the same game moment, independent of the (already structurally
+            // verified) downstream mixing logic.
+            $sformat(mmr_path, "%0s/mmr_%05d.bin", frame_dir, frame_ord);
+            mmr_fd = $fopen(mmr_path, "wb");
+            if (mmr_fd != 0) begin
+                for (k = 0; k < 13; k = k + 1)
+                    $fwrite(mmr_fd, "%c",
+                        dut.u_game.u_video.u_colmix.u_prio.mmr[k]);
+                $fclose(mmr_fd);
             end
         end
     endtask
