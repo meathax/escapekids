@@ -239,6 +239,26 @@ module tb_escape_kids_full_smoke;
     // five destination scan-buffer sort-key slots under investigation
     // (1,2,4,8,9) read directly out of jt053244's u_even/u_odd RAM.
     // ------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Diagnostic-only sound register-stream trace (+SMOKE_SND_TRACE=<path>).
+    // Logs YM2151 and K053260 sound-CPU register writes, main-CPU mailbox
+    // writes and main->Z80 IRQ triggers as JSONL, plus one per-frame summary
+    // carrying the NMI and latch-read counts.  Optional
+    // +SMOKE_SND_STOP_FRAME=<n> holds the run open past the ordinary
+    // cpu_sound barrier until n displayed frames have elapsed, so attract
+    // music is reachable.  Observation-only: never drives the DUT and is
+    // unreachable without the plusarg, so all existing lanes keep
+    // byte-identical behaviour.
+    // ------------------------------------------------------------------
+    reg [2047:0] snd_trace_file;
+    integer snd_trace_fd;
+    reg snd_trace_enabled;
+    integer snd_stop_frame;
+    integer snd_trace_seq;
+    reg snd_fm_wr_prev, snd_pcm_wr_prev, snd_nmi_prev, snd_pcm_rd_prev,
+        snd_frame_lvbl_prev, snd_pcm_rd_all_prev;
+    reg [5:0] snd_pcm_rd_addr;
+    integer snd_nmi_count, snd_latch_rd_count, snd_ym_total, snd_pcm_total;
     reg [2047:0] dma_trace_file;
     integer dma_trace_fd;
     reg dma_trace_enabled;
@@ -1496,6 +1516,7 @@ module tb_escape_kids_full_smoke;
         // ordinary barrier would terminate long before the boot self-test
         // screens are reachable.  Default-off, so no existing lane changes.
         if (!rst && !frame_capture &&
+            !(snd_trace_enabled && snd_stop_frame > 0 && lvbl_falls < snd_stop_frame) &&
             ((input_scenario && input_scenario_done && input_reads >= input_min_reads &&
               frames > 2 && samples > 8 && rom_reads > 8) ||
              (!service_gate_enabled && !raster_enabled && !input_scenario && barrier_frame &&
@@ -1806,6 +1827,89 @@ module tb_escape_kids_full_smoke;
                 dut.u_game.u_main.cpu_din);
     end
 
+    // Sound register-stream trace (see declarations above). Every event is
+    // qualified either by an accepted-cycle enable (main CPU side) or a
+    // rising-edge detector (Z80 strobes), so each hardware access logs once.
+    wire snd_fm_wr  = dut.u_game.u_sound.fm_cs  && !dut.u_game.u_sound.wr_n;
+    wire snd_pcm_wr = dut.u_game.u_sound.pcm_cs && !dut.u_game.u_sound.wr_n;
+    wire snd_pcm_rd_all = dut.u_game.u_sound.pcm_cs && !dut.u_game.u_sound.rd_n;
+    wire snd_pcm_rd = snd_pcm_rd_all && dut.u_game.u_sound.A[5:1] == 5'd0;
+    wire snd_main_acc = dut.u_game.u_main.u_cpu.cen_out &&
+                        dut.u_game.u_main.dtack;
+    always @(posedge clk) begin
+        if (snd_trace_enabled && !rst) begin
+            if (snd_fm_wr && !snd_fm_wr_prev) begin
+                $fwrite(snd_trace_fd,
+                    "{\"schema\":\"esckids-snd-v1\",\"seq\":%0d,\"e\":\"ym\",\"frame\":%0d,\"cyc\":%0d,\"a0\":%0d,\"d\":%0d}\n",
+                    snd_trace_seq, lvbl_falls, diag_cycle_count,
+                    dut.u_game.u_sound.A[0], dut.u_game.u_sound.cpu_dout);
+                snd_trace_seq = snd_trace_seq + 1;
+                snd_ym_total = snd_ym_total + 1;
+            end
+            if (snd_pcm_wr && !snd_pcm_wr_prev) begin
+                $fwrite(snd_trace_fd,
+                    "{\"schema\":\"esckids-snd-v1\",\"seq\":%0d,\"e\":\"pcm\",\"frame\":%0d,\"cyc\":%0d,\"a\":%0d,\"d\":%0d}\n",
+                    snd_trace_seq, lvbl_falls, diag_cycle_count,
+                    dut.u_game.u_sound.A[5:0], dut.u_game.u_sound.cpu_dout);
+                snd_trace_seq = snd_trace_seq + 1;
+                snd_pcm_total = snd_pcm_total + 1;
+            end
+            if (snd_main_acc && dut.u_game.u_main.snd_cs &&
+                dut.u_game.u_main.cpu_we) begin
+                $fwrite(snd_trace_fd,
+                    "{\"schema\":\"esckids-snd-v1\",\"seq\":%0d,\"e\":\"m2s\",\"frame\":%0d,\"cyc\":%0d,\"a0\":%0d,\"d\":%0d}\n",
+                    snd_trace_seq, lvbl_falls, diag_cycle_count,
+                    dut.u_game.u_main.cpu_addr[0], dut.u_game.u_main.cpu_dout);
+                snd_trace_seq = snd_trace_seq + 1;
+            end
+            if (snd_main_acc && dut.u_game.u_main.snd_irq) begin
+                $fwrite(snd_trace_fd,
+                    "{\"schema\":\"esckids-snd-v1\",\"seq\":%0d,\"e\":\"irq\",\"frame\":%0d,\"cyc\":%0d,\"rw\":\"%s\"}\n",
+                    snd_trace_seq, lvbl_falls, diag_cycle_count,
+                    dut.u_game.u_main.cpu_we ? "w" : "r");
+                snd_trace_seq = snd_trace_seq + 1;
+            end
+            if (!dut.u_game.u_sound.nmi_n && snd_nmi_prev)
+                snd_nmi_count = snd_nmi_count + 1;
+            if (snd_pcm_rd && !snd_pcm_rd_prev)
+                snd_latch_rd_count = snd_latch_rd_count + 1;
+            // Log individual Z80-side K053260 reads of the low registers
+            // (0-3: main->sub mailbox and sub->main echo) with the data the
+            // chip returned; logged at strobe end so pcm_dout is settled.
+            if (!snd_pcm_rd_all && snd_pcm_rd_all_prev &&
+                snd_pcm_rd_addr <= 6'd3) begin
+                $fwrite(snd_trace_fd,
+                    "{\"schema\":\"esckids-snd-v1\",\"seq\":%0d,\"e\":\"pcr\",\"frame\":%0d,\"cyc\":%0d,\"a\":%0d,\"d\":%0d}\n",
+                    snd_trace_seq, lvbl_falls, diag_cycle_count,
+                    snd_pcm_rd_addr, dut.u_game.u_sound.pcm_dout);
+                snd_trace_seq = snd_trace_seq + 1;
+            end
+            if (snd_pcm_rd_all) snd_pcm_rd_addr <= dut.u_game.u_sound.A[5:0];
+            snd_pcm_rd_all_prev <= snd_pcm_rd_all;
+            if (snd_frame_lvbl_prev && !LVBL) begin
+                $fwrite(snd_trace_fd,
+                    "{\"schema\":\"esckids-snd-v1\",\"seq\":%0d,\"e\":\"frame\",\"frame\":%0d,\"nmi\":%0d,\"latch_rd\":%0d,\"ym_total\":%0d,\"pcm_total\":%0d}\n",
+                    snd_trace_seq, lvbl_falls, snd_nmi_count,
+                    snd_latch_rd_count, snd_ym_total, snd_pcm_total);
+                snd_trace_seq = snd_trace_seq + 1;
+                snd_nmi_count = 0;
+                snd_latch_rd_count = 0;
+            end
+            snd_fm_wr_prev  <= snd_fm_wr;
+            snd_pcm_wr_prev <= snd_pcm_wr;
+            snd_pcm_rd_prev <= snd_pcm_rd;
+            snd_nmi_prev    <= dut.u_game.u_sound.nmi_n;
+            snd_frame_lvbl_prev <= LVBL;
+            if (snd_stop_frame > 0 && lvbl_falls >= snd_stop_frame) begin
+                $fclose(snd_trace_fd);
+                snd_trace_enabled = 1'b0;
+                $display("ESCAPE KIDS SND TRACE DONE frames=%0d ym=%0d pcm=%0d",
+                    lvbl_falls, snd_ym_total, snd_pcm_total);
+                $finish;
+            end
+        end
+    end
+
     initial begin
         loader_writes = 0;
         rom_reads = 0;
@@ -1912,6 +2016,22 @@ module tb_escape_kids_full_smoke;
         dma_trace_file = "";
         dma_trace_fd = 0;
         dma_trace_enabled = 1'b0;
+        snd_trace_file = "";
+        snd_trace_fd = 0;
+        snd_trace_enabled = 1'b0;
+        snd_stop_frame = 0;
+        snd_trace_seq = 0;
+        snd_fm_wr_prev = 1'b0;
+        snd_pcm_wr_prev = 1'b0;
+        snd_pcm_rd_prev = 1'b0;
+        snd_nmi_prev = 1'b1;
+        snd_frame_lvbl_prev = 1'b0;
+        snd_pcm_rd_all_prev = 1'b0;
+        snd_pcm_rd_addr = 6'd0;
+        snd_nmi_count = 0;
+        snd_latch_rd_count = 0;
+        snd_ym_total = 0;
+        snd_pcm_total = 0;
         frame_capture = 1'b0;
         frame_dir = "";
         frame_path = "";
@@ -2080,6 +2200,14 @@ module tb_escape_kids_full_smoke;
             dma_slot_watch[3] = 8'd8;
             dma_slot_watch[4] = 8'd9;
         end
+        if ($value$plusargs("SMOKE_SND_TRACE=%s", snd_trace_file)) begin
+            snd_trace_fd = $fopen(snd_trace_file, "w");
+            if (snd_trace_fd == 0)
+                $fatal(1, "Cannot open smoke sound trace %0s", snd_trace_file);
+            snd_trace_enabled = 1'b1;
+        end
+        if (!$value$plusargs("SMOKE_SND_STOP_FRAME=%d", snd_stop_frame))
+            snd_stop_frame = 0;
         if ($test$plusargs("SMOKE_TRACE_PHASE"))
             trace_phase = 1'b1;
         barrier_frame = smoke_barrier == "frame";
