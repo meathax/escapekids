@@ -72,14 +72,19 @@ assign volume   = { mmr[7][6:0] };
 assign tst_mode = tst_en && TESTRD==1;
 
 assign nx_pitch_cnt = {1'd0, pitch_cnt } + 13'd1;
-assign nibble       = adpcm_cnt^swap ? rom_data[7:4] : rom_data[3:0];
+// KDSC decodes the low nybble first, then the high nybble of each byte,
+// regardless of the reverse (swap) bit; only the byte address direction
+// changes in reverse mode (MAME k053260.cpp KDSC_Voice::play).  keyon sets
+// adpcm_cnt=1, so adpcm_cnt==1 selects the first (low) nybble.
+assign nibble       = adpcm_cnt ? rom_data[3:0] : rom_data[7:4];
 assign sample       = nx_pitch_cnt[12] & cen;
 assign svl          = {1'b0, vol_l[13-:7]};
 assign svr          = {1'b0, vol_r[13-:7]};
 assign mul_l        = pre_snd * svl;
 assign mul_r        = pre_snd * svr;
 assign match        = cnt == length;
-assign neg_cnt      = -{5'd0,cnt};
+// Reverse playback pre-decrement: -(cnt+1) == ~cnt
+assign neg_cnt      = ~{5'd0,cnt};
 
 always @* begin
     case ( nibble )
@@ -122,8 +127,17 @@ always @(posedge clk) begin
     end
 end
 
+// The real chip pre-increments the sample position: playback starts one
+// byte after the programmed start address.  The Simpsons/Vendetta-family
+// sound ROM headers list start addresses one greater than the values the
+// CPU writes to the registers, and starting at +0 gives ADPCM sounds a DC
+// offset or overflow distortion (MAME k053260.cpp KDSC_Voice::play).
+// The CPU test-read path (register 0x2E) post-increments instead, so ROM
+// readback still begins at start+0 (MAME KDSC_Voice::read_rom).
 always @(posedge clk) begin
-    rom_addr <= start + (swap ? neg_cnt : {5'd0,cnt});
+    rom_addr <= start + (tst_mode ? {5'd0,cnt}       :
+                         swap     ? neg_cnt          :
+                                    ({5'd0,cnt}+21'd1));
 end
 
 always @* begin
@@ -170,7 +184,16 @@ always @(posedge clk) begin
                             end
                         end
                     end
-                    pre_snd <= adpcm_en ? adpcm_lim : rom_data;
+                    // On a loop wrap the hardware restarts with a cleared
+                    // sample register (MAME: m_position = m_output = 0).
+                    // Without this, residual DC left by one pass of a looped
+                    // ADPCM sample accumulates on every pass until the
+                    // accumulator saturates and the channel degenerates into
+                    // loud clipped noise after some minutes of play.
+                    if( match && loop && (!adpcm_cnt || !adpcm_en) )
+                        pre_snd <= 0;
+                    else
+                        pre_snd <= adpcm_en ? adpcm_lim : rom_data;
                 end
             end
         end

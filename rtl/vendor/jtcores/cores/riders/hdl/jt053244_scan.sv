@@ -52,6 +52,7 @@
     output reg        dr_start,
     input             dr_busy,
     input             gx975,
+    input             gx975_raw,  // strap only, not gated by cfg[3]
 
     // Debug
     input      [ 7:0] debug_bus
@@ -76,6 +77,10 @@ wire [ 9:0] hflip_off;
 wire [ 1:0] nx_mir, hsz, vsz;
 wire        last_obj;
 wire        gx975_path = GX975 && gx975;
+// Strap-only Escape Kids selector.  The 053246 sprite-table size and the
+// display-window offset polarity are wiring properties of the chip pair, not
+// of the runtime OBJSET1 bit, so they must not follow cfg[3].
+wire        gx975_hw   = GX975 && gx975_raw;
 wire [ 9:0] gx_ox_half = {1'b0,scan_odd[9:1]} + 10'd1;
 wire [10:0] gx_ox_flip = {1'b0,gx_ox_half} + SCREEN_WIDTH;
 wire [ 9:0] x_start = gx975_path ?
@@ -89,7 +94,18 @@ assign hflip     = (ghf ^ pre_hf)&!hmir | hmir_eff;
 assign scan_addr = { scan_obj, scan_sub };
 assign ysub      = ydiff[3:0];
 assign last_obj  = &scan_obj[6:0];
-assign nx_mir    = scan_even[9:8];
+// Donor 053244/5 (parodius/lgtnfght/tmnt2) keeps its real mirror-y/mirror-x
+// bits at word6[9:8]. Escape Kids (GX975) is wired to a real 053246/053247
+// pair instead: MAME's own k053246_k053247_k055673.cpp sprite-format table
+// documents word6[15]=mirror y, word6[14]=mirror x for that chip, with
+// word6[9:8] instead being a game-dependent "effect code" (palette bank /
+// shadow select) unrelated to mirroring. Live esckids OBJ RAM captures
+// confirm this: word6[15:14] is always 0 across every active sprite sampled,
+// while word6[9:8] is frequently nonzero (e.g. code 0x5240/0x3340-0x33a0).
+// Reading mirror from [9:8] on the GX975 path therefore mistakes ordinary
+// effect-code data for a mirror-x/y request, forcing hflip to track hhalf
+// instead of each sprite's own independent word0[12] flip-x bit.
+assign nx_mir    = gx975_path ? scan_even[15:14] : scan_even[9:8];
 assign {vsz,hsz} = size;
 assign hflip_off = ghf ? HFLIP_OFFSET[9:0] : 0;
 
@@ -97,7 +113,13 @@ assign hflip_off = ghf ? HFLIP_OFFSET[9:0] : 0;
 always @(negedge clk) cen2 <= ~cen2;
 
 always @(posedge clk) begin
-    xadj <= xoffset + 10'h66 + hflip_off;
+    // MAME subtracts the 053246 display-window X offset (ox-offx) before
+    // applying the per-game dx.  The k44 donor path adds it, which stayed
+    // invisible while every donor game wrote offx==0.  jtcores' own 053246
+    // scanner (cores/simson/hdl/jt053246_scan.sv) subtracts.  110 = the
+    // shared jtframe_objdraw pipeline constant 105 plus MAME's esckids dx=5.
+    xadj <= gx975_hw ? (10'd110 - xoffset + hflip_off)
+                     : (xoffset + 10'h66 + hflip_off);
     yadj <= yoffset + 10'h107;
     hscl <= rd_pzoffset(hzoom);
     /* verilator lint_off WIDTH */
@@ -231,13 +253,25 @@ always @(posedge clk, posedge rst) begin
                     y <=  y+yadj;
                     vzoom <= scan_even[11:0];
                     if( gx975_path ) begin
-                        // MAME's GX975 path halves the inverse horizontal
-                        // scale, equivalent to doubling JTFRAME's zoom step.
-                        // Keep the transformed sprite on the zoom path even
-                        // when the source step is unity.
+                        // MAME's GX975 zoom register is reciprocal
+                        // (k053246_k053247_k055673.h,
+                        // k053247_draw_single_sprite_gxcore):
+                        //   zoomx = raw ? (0x400000+(raw>>1))/raw : 0x800000;
+                        //   if( objset1[3] ) zoomx >>= 1;   // Escape Kids only
+                        // jtframe_draw's own hz_cnt/HZONE accumulator is
+                        // independently reciprocal in hzoom (its long-run
+                        // scale factor is HZONE/hzoom), so the two
+                        // reciprocals compose into one exact, raw-uniform
+                        // linear map: hzoom = raw<<1 for every raw code,
+                        // with no exceptions (verified against the real
+                        // MAME formula above by sweeping raw=1..0x3ff in
+                        // rtl/esckids/verify/tb_esckids_obj_zoom.sv). A
+                        // former hard-coded raw==0x020 -> hzoom=0x041
+                        // special case broke that uniformity at exactly one
+                        // raw value, producing a one-frame discontinuity
+                        // every time a sprite's zoom register swept through
+                        // 0x020 - the coin-icon's jagged/notched disc edge.
                         hzoom <= (sq ? scan_even[11:0] : scan_odd[11:0]) << 1;
-                        if( (sq ? scan_even[11:0] : scan_odd[11:0]) == 12'h020 )
-                            hzoom <= 12'h041;
                     end else begin
                         hzoom <= sq ? scan_even[11:0] : scan_odd[11:0];
                     end

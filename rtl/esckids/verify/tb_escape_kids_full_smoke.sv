@@ -25,7 +25,36 @@ module tb_escape_kids_full_smoke;
     reg [5:0] snd_en = 6'h3f;
     reg [7:0] snd_vol = 8'hff;
     reg [31:0] status = 0, dipsw = 0;
-    reg dip_pause = 0, dip_test = 0, service = 0, tilt = 0;
+    // dip_pause is jtframe_dip's synthesized "not paused" signal
+    // (jtframe_dip.v: "dip_pause <= ~game_pause & ~osd_shown; // active low"),
+    // i.e. 1 = normal play, 0 = paused/frozen.  This standalone harness has
+    // no jtframe_dip instance and must present the same steady-state value
+    // jtframe_board delivers once boot/OSD settle in a real integration:
+    // dip_pause=1.  Leaving it at its 0 (paused) reset value permanently
+    // deasserts jtsimson_main's irq_mx (irq_mx = irqn_ff | ~dip_pause), which
+    // holds jtkcpu's active-low irq_n input inactive for the entire run --
+    // the self-test sequencer's IRQ-gated screen advance can then never
+    // fire, even though irqn_ff/irqen/CC.I are all otherwise correct.
+    // dip_test/service/tilt are jtframe_joysticks' "game_*" outputs
+    // (jtframe_joysticks.v: "// game signals are active low"; game_test,
+    // game_service and game_tilt all reset to 1 and are computed as
+    // ~key_*, i.e. 1 = idle/not-pressed, 0 = held).  This standalone
+    // harness has no jtframe_joysticks instance and, outside the
+    // service-gate/input-scenario branches (which already drive their own
+    // correct 1'b1 idle value), never assigns these regs past their
+    // declared reset value -- so the declared value IS the steady-state
+    // value for the plain default run.  service was left at its 0
+    // (held/active) reset value for the whole simulated run: jtsimson_main
+    // (esckids branch) folds this bit directly into the eeprom_cs/stsw_cs
+    // reads the CPU polls at boot, so a permanently-held service switch
+    // routes boot into the interactive "MANUAL TEST" self-test menu
+    // instead of MAME's default attract sequence.  A real MiSTer
+    // integration's jtframe_joysticks always presents service=1 (idle)
+    // unless the operator is actually holding the service key, so real
+    // hardware does not exhibit this.  dip_test carries the same active-low
+    // idle=1 convention (unused by the esckids branch today, but corrected
+    // here too for harness fidelity with jtframe_joysticks/jtframe_board).
+    reg dip_pause = 1, dip_test = 1, service = 1, tilt = 0;
     wire dip_flip;
     reg [1:0] dip_fxlevel = 0;
     reg [3:0] gfx_en = 0;
@@ -102,6 +131,7 @@ module tb_escape_kids_full_smoke;
     integer trace_seq;
     integer trace_limit;
     integer trace_min_events;
+    integer trace_start_frame;
     reg trace_enabled;
     reg trace_phase;
     reg stack_debug;
@@ -109,17 +139,49 @@ module tb_escape_kids_full_smoke;
     reg [15:0] trace_prev_addr;
     reg trace_prev_write;
     integer trace_stale_drop_count;
-    integer max_cycles;
+    // longint (64-bit): a plain 32-bit `integer` caps SMOKE_CYCLES near
+    // 2.147e9, which this project's own deep-scenario evidence showed is
+    // insufficient to reach native video frame ~3400 (2.1e9 cycles only
+    // bought 2588 frames before the watchdog fired at
+    // tb_escape_kids_full_smoke.sv:2115). Verification-only widening, no
+    // synthesizable RTL touched.
+    longint max_cycles;
+    // Kept well under Verilator's known-safe 2^31-1 single-repeat-count
+    // limit so `repeat (SMOKE_CYCLE_CHUNK) @(posedge clk);` never truncates.
+    localparam longint SMOKE_CYCLE_CHUNK = 64'd1_000_000_000;
+    longint cyc_chunks;
+    longint cyc_remainder;
     integer scenario_cycle;
+    // Free-running diagnostic cycle counter, valid across every scenario
+    // mode (coin_scenario included, which does not advance scenario_cycle).
+    // Observation-only: never read by PASS/FAIL gate logic, only by trace
+    // emission below.
+    longint unsigned diag_cycle_count;
     integer input_trace_seq;
     integer input_reads;
     integer input_edges;
     integer input_min_reads;
     reg input_scenario;
     reg input_scenario_done;
+    reg coin_scenario;
+    reg [3:0] coin_prev;
+    integer coin_frame;
+    integer coin_hold_frames;
+    integer coin_release_frame;
     reg [1023:0] input_trace_file;
     integer input_trace_fd;
     reg input_trace_enabled;
+    // Diagnostic-only work-RAM byte watch: passively observes CPU accesses
+    // to one WRAM address (default 0x0002, the confirmed MAME character-
+    // select state byte) and logs an edge whenever the value changes.
+    // Never forces the bus, never gates PASS/FAIL.
+    reg [1023:0] wram_trace_file;
+    integer wram_trace_fd;
+    reg wram_trace_enabled;
+    integer wram_watch_addr;
+    reg [7:0] wram_watch_last;
+    reg wram_watch_valid;
+    integer wram_trace_seq;
     reg [1023:0] service_gate_scenario;
     reg [2047:0] service_gate_trace_file;
     reg [2047:0] service_gate_final_file;
@@ -168,6 +230,233 @@ module tb_escape_kids_full_smoke;
     reg [7:0] raster_shadow [0:12];
     reg workram_contract;
     reg workram_alias_inject;
+    // ------------------------------------------------------------------
+    // Diagnostic multi-frame K053244/jt053246_dma sprite-DMA trace.
+    // Entirely opt-in behind +SMOKE_DMA_TRACE=<path>; nothing below is
+    // reachable otherwise, so every pre-existing lane keeps byte-identical
+    // behaviour.  Logs dma_trig pulses, dma_bsy start/done edges and, at
+    // every dma_bsy-falling (DMA-complete) edge, the header word of the
+    // five destination scan-buffer sort-key slots under investigation
+    // (1,2,4,8,9) read directly out of jt053244's u_even/u_odd RAM.
+    // ------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Diagnostic-only sound register-stream trace (+SMOKE_SND_TRACE=<path>).
+    // Logs YM2151 and K053260 sound-CPU register writes, main-CPU mailbox
+    // writes and main->Z80 IRQ triggers as JSONL, plus one per-frame summary
+    // carrying the NMI and latch-read counts.  Optional
+    // +SMOKE_SND_STOP_FRAME=<n> holds the run open past the ordinary
+    // cpu_sound barrier until n displayed frames have elapsed, so attract
+    // music is reachable.  Observation-only: never drives the DUT and is
+    // unreachable without the plusarg, so all existing lanes keep
+    // byte-identical behaviour.
+    // ------------------------------------------------------------------
+    reg [2047:0] snd_trace_file;
+    integer snd_trace_fd;
+    reg snd_trace_enabled;
+    integer snd_stop_frame;
+    integer snd_trace_seq;
+    reg snd_fm_wr_prev, snd_pcm_wr_prev, snd_nmi_prev, snd_pcm_rd_prev,
+        snd_frame_lvbl_prev, snd_pcm_rd_all_prev;
+    reg [5:0] snd_pcm_rd_addr;
+    integer snd_nmi_count, snd_latch_rd_count, snd_ym_total, snd_pcm_total;
+    reg [2047:0] dma_trace_file;
+    integer dma_trace_fd;
+    reg dma_trace_enabled;
+    integer dma_frame_ord;
+    reg dma_lvbl_prev;
+    reg dma_bsy_prev;
+    reg dma_trig_prev;
+    reg dma_44_prev;
+    integer dma_slot_idx;
+    reg [7:0] dma_slot_watch [0:4];
+    // Per-frame sprite-pipeline activity counters (diagnostic only).
+    integer dma_obj_px, dma_dr_start, dma_inzone_hits, dma_rom_cs;
+    reg dma_dr_start_prev, dma_rom_cs_prev;
+
+    task automatic dma_trace_dump_slots(input integer frame_no, input [63:0] tag);
+        reg [7:0] slot_no;
+        reg [15:0] even_w, odd_w;
+        begin
+            for (dma_slot_idx = 0; dma_slot_idx < 5; dma_slot_idx = dma_slot_idx + 1) begin
+                slot_no = dma_slot_watch[dma_slot_idx];
+                // scan_addr = {scan_obj[7:0], scan_sub[1:0]}; header word (sub==0)
+                // for object N lives at word index N*4 in u_even/u_odd.
+                even_w = { dut.u_game.u_video.u_obj.u_scan.u_even.u_hi.u_ram.mem[slot_no*4],
+                           dut.u_game.u_video.u_obj.u_scan.u_even.u_lo.u_ram.mem[slot_no*4] };
+                odd_w  = { dut.u_game.u_video.u_obj.u_scan.u_odd.u_hi.u_ram.mem[slot_no*4],
+                           dut.u_game.u_video.u_obj.u_scan.u_odd.u_lo.u_ram.mem[slot_no*4] };
+                if (dma_trace_fd != 0)
+                    $fwrite(dma_trace_fd,
+                        "{\"schema\":\"esckids-dma-slot-v1\",\"frame\":%0d,\"event\":\"%0s\",\"slot\":%0d,\"even_hdr\":%0d,\"odd_hdr\":%0d,\"enable\":%0d}\n",
+                        frame_no, tag, slot_no, even_w, odd_w, even_w[15]);
+            end
+        end
+    endtask
+
+    // Source-side diagnostic: dump the raw CPU-RAM header word (word 0,
+    // 16 bits) of every sprite-table entry in the 120..145 index range so
+    // the actual sort-key bytes reaching the DMA scan can be compared
+    // directly against what lands (or doesn't) in the destination buffer.
+    // Entry N's word 0 lives at source word address N*8.
+    task automatic dma_trace_dump_source(input integer frame_no, input [63:0] tag);
+        integer src_idx;
+        reg [15:0] hdr;
+        begin
+            for (src_idx = 120; src_idx <= 145; src_idx = src_idx + 1) begin
+                hdr = { dut.u_game.u_video.u_obj.u_ram.u_hi.u_dual.u_ram.mem[src_idx*8],
+                        dut.u_game.u_video.u_obj.u_ram.u_lo.u_dual.u_ram.mem[src_idx*8] };
+                if (dma_trace_fd != 0)
+                    $fwrite(dma_trace_fd,
+                        "{\"schema\":\"esckids-dma-src-v1\",\"frame\":%0d,\"event\":\"%0s\",\"entry\":%0d,\"hdr\":%0d,\"enable\":%0d,\"sortkey\":%0d}\n",
+                        frame_no, tag, src_idx, hdr, hdr[15], hdr[6:0]);
+            end
+        end
+    endtask
+
+    // One-shot wide diagnostic: every source entry 0..255 (full RAMW=12
+    // table) and every destination slot 0..127, so the real enabled
+    // sort-key population can be seen without guessing which range matters.
+    task automatic dma_trace_dump_full(input integer frame_no);
+        integer idx;
+        reg [15:0] hdr;
+        begin
+            for (idx = 0; idx <= 255; idx = idx + 1) begin
+                hdr = { dut.u_game.u_video.u_obj.u_ram.u_hi.u_dual.u_ram.mem[idx*8],
+                        dut.u_game.u_video.u_obj.u_ram.u_lo.u_dual.u_ram.mem[idx*8] };
+                if (dma_trace_fd != 0 && hdr[15])
+                    $fwrite(dma_trace_fd,
+                        "{\"schema\":\"esckids-dma-src-full-v1\",\"frame\":%0d,\"entry\":%0d,\"hdr\":%0d,\"sortkey\":%0d}\n",
+                        frame_no, idx, hdr, hdr[6:0]);
+            end
+            for (idx = 0; idx <= 127; idx = idx + 1) begin
+                hdr = { dut.u_game.u_video.u_obj.u_scan.u_even.u_hi.u_ram.mem[idx*4],
+                        dut.u_game.u_video.u_obj.u_scan.u_even.u_lo.u_ram.mem[idx*4] };
+                if (dma_trace_fd != 0 && hdr[15])
+                    $fwrite(dma_trace_fd,
+                        "{\"schema\":\"esckids-dma-dst-full-v1\",\"frame\":%0d,\"slot\":%0d,\"hdr\":%0d}\n",
+                        frame_no, idx, hdr);
+            end
+        end
+    endtask
+
+    always @(posedge clk) begin
+        if (rst) begin
+            dma_frame_ord = 0;
+            dma_lvbl_prev = 1'b0;
+            dma_bsy_prev  = 1'b0;
+            dma_trig_prev = 1'b0;
+            dma_44_prev   = 1'b0;
+            dma_obj_px = 0;
+            dma_dr_start = 0;
+            dma_inzone_hits = 0;
+            dma_rom_cs = 0;
+            dma_dr_start_prev = 1'b0;
+            dma_rom_cs_prev = 1'b0;
+        end else if (dma_trace_enabled) begin
+            if (LVBL && !dma_lvbl_prev) begin
+                // Nothing: frame ordinal advances on the falling edge below,
+                // matching the existing frame_ord convention (post-blank).
+            end
+            if (dma_lvbl_prev && !LVBL) begin
+                if (dma_trace_fd != 0)
+                    $fwrite(dma_trace_fd,
+                        "{\"schema\":\"esckids-dma-act-v1\",\"frame\":%0d,\"obj_px\":%0d,\"dr_start\":%0d,\"rom_cs_rises\":%0d}\n",
+                        dma_frame_ord, dma_obj_px, dma_dr_start, dma_rom_cs);
+                dma_frame_ord = dma_frame_ord + 1;
+                dma_obj_px = 0;
+                dma_dr_start = 0;
+                dma_rom_cs = 0;
+            end
+            dma_lvbl_prev = LVBL;
+            if (pxl_cen && dut.u_game.u_video.lyro_pxl[3:0] != 4'd0)
+                dma_obj_px = dma_obj_px + 1;
+            if (dut.u_game.u_video.u_obj.u_scan.dr_start && !dma_dr_start_prev)
+                dma_dr_start = dma_dr_start + 1;
+            dma_dr_start_prev = dut.u_game.u_video.u_obj.u_scan.dr_start;
+            if (dut.u_game.u_video.lyro_cs && !dma_rom_cs_prev)
+                dma_rom_cs = dma_rom_cs + 1;
+            dma_rom_cs_prev = dut.u_game.u_video.lyro_cs;
+
+            if (dut.u_game.u_video.u_obj.u_scan.dma_trig && !dma_trig_prev && dma_trace_fd != 0)
+                $fwrite(dma_trace_fd,
+                    "{\"schema\":\"esckids-dma-edge-v1\",\"frame\":%0d,\"event\":\"dma_trig\",\"dma_en\":%0d,\"cfg\":%0d}\n",
+                    dma_frame_ord, dut.u_game.u_video.u_obj.u_scan.dma_en,
+                    dut.u_game.u_video.u_obj.u_scan.cfg);
+            dma_trig_prev = dut.u_game.u_video.u_obj.u_scan.dma_trig;
+
+            if (dut.u_game.u_video.u_obj.u_scan.u_dma.dma_44 && !dma_44_prev && dma_trace_fd != 0)
+                $fwrite(dma_trace_fd,
+                    "{\"schema\":\"esckids-dma-edge-v1\",\"frame\":%0d,\"event\":\"dma_44_set\"}\n",
+                    dma_frame_ord);
+            dma_44_prev = dut.u_game.u_video.u_obj.u_scan.u_dma.dma_44;
+
+            if (dut.u_game.u_video.u_obj.u_scan.dma_bsy && !dma_bsy_prev && dma_trace_fd != 0)
+                $fwrite(dma_trace_fd,
+                    "{\"schema\":\"esckids-dma-edge-v1\",\"frame\":%0d,\"event\":\"dma_bsy_start\",\"dma_en\":%0d}\n",
+                    dma_frame_ord, dut.u_game.u_video.u_obj.u_scan.dma_en);
+            if (!dut.u_game.u_video.u_obj.u_scan.dma_bsy && dma_bsy_prev) begin
+                if (dma_trace_fd != 0)
+                    $fwrite(dma_trace_fd,
+                        "{\"schema\":\"esckids-dma-edge-v1\",\"frame\":%0d,\"event\":\"dma_bsy_done\"}\n",
+                        dma_frame_ord);
+                dma_trace_dump_slots(dma_frame_ord, "dma_bsy_done");
+                if (dma_frame_ord < 100)
+                    dma_trace_dump_source(dma_frame_ord, "dma_bsy_done");
+                if (dma_frame_ord == 600)
+                    dma_trace_dump_full(dma_frame_ord);
+            end
+            dma_bsy_prev = dut.u_game.u_video.u_obj.u_scan.dma_bsy;
+        end
+    end
+    // ------------------------------------------------------------------
+    // Diagnostic native-frame capture.  Entirely opt-in: nothing below is
+    // reachable unless +SMOKE_FRAME_DIR is supplied, so every pre-existing
+    // lane keeps byte-identical behaviour.  Every completed native frame
+    // ordinal is sampled and receipted; PPM emission is presentation-only
+    // and may be restricted with first/last/stride.
+    // ------------------------------------------------------------------
+    localparam integer FRAME_MAX_W = 512;
+    localparam integer FRAME_MAX_H = 320;
+    reg [2047:0] frame_dir;
+    reg [2047:0] frame_path;
+    reg [2047:0] frame_receipt_file;
+    integer frame_receipt_fd;
+    reg frame_capture;
+    integer frame_first, frame_last, frame_stride, frame_stop;
+    integer frame_ord, frame_x, frame_y, frame_w, frame_h;
+    integer frame_fd, frame_idx, frame_nonblack;
+    reg [31:0] frame_hash;
+    // Escape external-timing bridge observation (diagnostic only).
+    integer frame_hld, frame_vld;
+    integer frame_vmin, frame_vmax, frame_hmin, frame_hmax, frame_vsteps;
+    reg [8:0] frame_vprev;
+    reg frame_hld_prev, frame_vld_prev;
+    integer tile_cpu_wr, tile_ram_we, tile_gfxcs_wr, pal_cpu_wr;
+
+    // Where do the K052109 tilemap writes go?  Sampled on every clock, not
+    // only at pxl_cen, because the CPU write cycle is clk-domain.
+    always @(posedge clk) begin
+        if (rst) begin
+            tile_cpu_wr   = 0;
+            tile_ram_we   = 0;
+            tile_gfxcs_wr = 0;
+            pal_cpu_wr    = 0;
+        end else if (frame_capture) begin
+            if (dut.u_game.u_main.tilesys_cs && dut.u_game.u_main.cpu_we &&
+                dut.u_game.u_main.u_cpu.cen_out && dut.u_game.u_main.dtack)
+                tile_cpu_wr = tile_cpu_wr + 1;
+            if (dut.u_game.u_main.pal_cs && dut.u_game.u_main.cpu_we &&
+                dut.u_game.u_main.u_cpu.cen_out && dut.u_game.u_main.dtack)
+                pal_cpu_wr = pal_cpu_wr + 1;
+            if (dut.u_game.u_video.u_scroll.u_tilemap.gfx_cs &&
+                dut.u_game.u_video.u_scroll.u_tilemap.cpu_we)
+                tile_gfxcs_wr = tile_gfxcs_wr + 1;
+            if (|dut.u_game.u_video.u_scroll.u_tilemap.we)
+                tile_ram_we = tile_ram_we + 1;
+        end
+    end
+    reg frame_lvbl_prev, frame_lhbl_prev;
+    reg [7:0] frame_buf [0:FRAME_MAX_W*FRAME_MAX_H*3-1];
     reg [1023:0] buserror_trace_file;
     integer buserror_trace_fd;
     integer buserror_seen;
@@ -498,23 +787,33 @@ module tb_escape_kids_full_smoke;
                 $fatal(1, "Authenticated stream has trailing data after %0h bytes", 26'h6e0000);
             $fclose(fd);
             wait (!dwnld_busy);
-            // The external model applies SWAB=1 exactly as jtframe_sdram does:
-            // even stream bytes land in the high lane and odd bytes in low.
-            if (media[media_index(2'd0, 22'h000000) + 1] !== sample_main)
+            // jtframe_dwnld registers ioctl_wr/dout for one clock before it
+            // presents prog_we, so the final stream byte is still in flight
+            // when dwnld_busy drops.  Flush the pipeline before sampling.
+            repeat (8) @(posedge clk);
+            // jtframe_dwnld is instantiated with SWAB=1, so
+            // nx_prog_mask = (eff_addr[0]^1) ? 2'b10 : 2'b01 (active low):
+            // an even effective byte offset writes the LOW lane
+            // (prog_data[7:0] -> media[idx]) and an odd offset writes the
+            // high lane.  That matches the fast diagnostic lane, where
+            // $readmemh puts the even ROM byte at the even media index.
+            // (The previous high-lane expectation here was never exercised:
+            // the AUTH_MEDIA full-smoke lane had no successful run.)
+            if (media[media_index(2'd0, 22'h000000)] !== sample_main)
                 $fatal(1, "main physical lane mismatch got=%02h exp=%02h",
-                    media[media_index(2'd0, 22'h000000) + 1], sample_main);
-            if (media[media_index(2'd1, 22'h000000) + 1] !== sample_sound)
+                    media[media_index(2'd0, 22'h000000)], sample_main);
+            if (media[media_index(2'd1, 22'h000000)] !== sample_sound)
                 $fatal(1, "sound physical lane mismatch got=%02h exp=%02h",
-                    media[media_index(2'd1, 22'h000000) + 1], sample_sound);
-            if (media[media_index(2'd1, 22'h010000) + 1] !== sample_pcm)
+                    media[media_index(2'd1, 22'h000000)], sample_sound);
+            if (media[media_index(2'd1, 22'h010000)] !== sample_pcm)
                 $fatal(1, "PCM physical lane mismatch got=%02h exp=%02h",
-                    media[media_index(2'd1, 22'h010000) + 1], sample_pcm);
-            if (media[media_index(2'd2, 22'h000000) + 1] !== sample_tiles)
+                    media[media_index(2'd1, 22'h010000)], sample_pcm);
+            if (media[media_index(2'd2, 22'h000000)] !== sample_tiles)
                 $fatal(1, "tile physical lane mismatch got=%02h exp=%02h",
-                    media[media_index(2'd2, 22'h000000) + 1], sample_tiles);
-            if (media[media_index(2'd3, 22'h000000) + 1] !== sample_sprites)
+                    media[media_index(2'd2, 22'h000000)], sample_tiles);
+            if (media[media_index(2'd3, 22'h000000)] !== sample_sprites)
                 $fatal(1, "sprite physical lane mismatch got=%02h exp=%02h",
-                    media[media_index(2'd3, 22'h000000) + 1], sample_sprites);
+                    media[media_index(2'd3, 22'h000000)], sample_sprites);
             if (sample_gap !== 8'h00)
                 $fatal(1, "alignment gap is non-zero at 0x020000: %02h", sample_gap);
             if (loader_writes !== 26'h6e0000)
@@ -522,6 +821,171 @@ module tb_escape_kids_full_smoke;
         end
     endtask
 `endif
+
+    // Presentation-only: serialise the already-sampled native frame to a
+    // binary PPM (P6).  Never called unless frame capture is enabled.
+    task automatic frame_emit;
+        integer fx, fy, base;
+        begin
+            $sformat(frame_path, "%0s/frame_%05d.ppm", frame_dir, frame_ord);
+            frame_fd = $fopen(frame_path, "wb");
+            if (frame_fd == 0)
+                $fatal(1, "Cannot open frame file %0s", frame_path);
+            $fwrite(frame_fd, "P6\n%0d %0d\n255\n", frame_w, frame_h);
+            for (fy = 0; fy < frame_h; fy = fy + 1) begin
+                base = fy*FRAME_MAX_W*3;
+                for (fx = 0; fx < frame_w*3; fx = fx + 1)
+                    $fwrite(frame_fd, "%c", frame_buf[base+fx]);
+            end
+            $fclose(frame_fd);
+            frame_dump_ram;
+        end
+    endtask
+
+    // Diagnostic: the rendered screen is a single 8x8 tile repeated, which is
+    // either uniform tilemap VRAM (a CPU/write-path fault) or a stuck scan
+    // address (a video read-path fault).  Dump the raw K052109 code/attr RAM
+    // and the palette RAM alongside the frame so the two can be told apart.
+    task automatic frame_dump_ram;
+        integer fd, k;
+        reg [2047:0] path;
+        reg [2047:0] mmr_path;
+        integer mmr_fd;
+        begin
+            $sformat(path, "%0s/vram_%05d.bin", frame_dir, frame_ord);
+            fd = $fopen(path, "wb");
+            if (fd != 0) begin
+                for (k = 0; k < 8192; k = k + 1)
+                    $fwrite(fd, "%c",
+                        dut.u_game.u_video.u_scroll.u_tilemap.u_code.u_dual.u_ram.mem[k]);
+                for (k = 0; k < 8192; k = k + 1)
+                    $fwrite(fd, "%c",
+                        dut.u_game.u_video.u_scroll.u_tilemap.u_attr.u_dual.u_ram.mem[k]);
+                for (k = 0; k < 4096; k = k + 1)
+                    $fwrite(fd, "%c",
+                        dut.u_game.u_video.u_colmix.u_ram.u_dual.u_ram.mem[k]);
+                $fclose(fd);
+            end
+            // Additive debug dump: K053251 (jtcolmix_053251) internal mmr[0:12]
+            // register file, one byte per register (6 significant bits each).
+            // Used to compare the color-mixer's live colorbase-select register
+            // state against MAME's k053251_device internal register array at
+            // the same game moment, independent of the (already structurally
+            // verified) downstream mixing logic.
+            $sformat(mmr_path, "%0s/mmr_%05d.bin", frame_dir, frame_ord);
+            mmr_fd = $fopen(mmr_path, "wb");
+            if (mmr_fd != 0) begin
+                for (k = 0; k < 13; k = k + 1)
+                    $fwrite(mmr_fd, "%c",
+                        dut.u_game.u_video.u_colmix.u_prio.mmr[k]);
+                $fclose(mmr_fd);
+            end
+        end
+    endtask
+
+    // Every completed native frame ordinal gets a receipt line, whether or
+    // not a PPM was written for it.  The hash is accumulated per sampled
+    // pixel, so it covers the whole active window at pixel-clock-enable.
+    task automatic frame_receipt_line;
+        begin
+            if (frame_receipt_fd != 0)
+                $fwrite(frame_receipt_fd,
+                    "{\"schema\":\"escape-kids-native-frame-v1\",\"frame\":%0d,\"width\":%0d,\"height\":%0d,\"hash\":%0d,\"nonblack\":%0d,\"hld\":%0d,\"vld\":%0d,\"vdump_min\":%0d,\"vdump_max\":%0d,\"vdump_steps\":%0d,\"hdump_min\":%0d,\"hdump_max\":%0d,\"tile_cpu_wr\":%0d,\"tile_gfxcs_wr\":%0d,\"tile_ram_we\":%0d,\"pal_cpu_wr\":%0d,\"k052109_cfg\":%0d,\"cpu_pc\":%0d,\"emitted\":%s}\n",
+                    frame_ord, frame_w, frame_h, frame_hash, frame_nonblack,
+                    frame_hld, frame_vld, frame_vmin, frame_vmax, frame_vsteps,
+                    frame_hmin, frame_hmax,
+                    tile_cpu_wr, tile_gfxcs_wr, tile_ram_we, pal_cpu_wr,
+                    dut.u_game.u_video.u_scroll.u_tilemap.cfg,
+                    dut.u_game.u_main.u_cpu.pc,
+                    (frame_ord >= frame_first && frame_ord <= frame_last &&
+                     ((frame_ord - frame_first) % frame_stride) == 0) ? "true" : "false");
+        end
+    endtask
+
+    always @(posedge clk) begin
+        if (rst) begin
+            frame_x = 0;
+            frame_y = 0;
+            frame_w = 0;
+            frame_h = 0;
+            frame_nonblack = 0;
+            frame_hash = 32'h811c9dc5;
+            frame_lvbl_prev = 1'b0;
+            frame_lhbl_prev = 1'b0;
+        end else if (frame_capture && pxl_cen) begin
+            // External-timing bridge observation: the Escape CCU load pulses
+            // and the reconstructed 9-bit native counters.  Read-only.
+            if (dut.u_game.u_video.u_scroll.ext_hld && !frame_hld_prev)
+                frame_hld = frame_hld + 1;
+            if (dut.u_game.u_video.u_scroll.ext_vld && !frame_vld_prev)
+                frame_vld = frame_vld + 1;
+            frame_hld_prev = dut.u_game.u_video.u_scroll.ext_hld;
+            frame_vld_prev = dut.u_game.u_video.u_scroll.ext_vld;
+            if (dut.u_game.u_video.u_scroll.esc_vdump < frame_vmin)
+                frame_vmin = dut.u_game.u_video.u_scroll.esc_vdump;
+            if (dut.u_game.u_video.u_scroll.esc_vdump > frame_vmax)
+                frame_vmax = dut.u_game.u_video.u_scroll.esc_vdump;
+            if (dut.u_game.u_video.u_scroll.esc_hdump < frame_hmin)
+                frame_hmin = dut.u_game.u_video.u_scroll.esc_hdump;
+            if (dut.u_game.u_video.u_scroll.esc_hdump > frame_hmax)
+                frame_hmax = dut.u_game.u_video.u_scroll.esc_hdump;
+            if (dut.u_game.u_video.u_scroll.esc_vdump !== frame_vprev)
+                frame_vsteps = frame_vsteps + 1;
+            frame_vprev = dut.u_game.u_video.u_scroll.esc_vdump;
+            if (LVBL && LHBL) begin
+                if (frame_x < FRAME_MAX_W && frame_y < FRAME_MAX_H) begin
+                    frame_idx = (frame_y*FRAME_MAX_W + frame_x)*3;
+                    frame_buf[frame_idx+0] = red;
+                    frame_buf[frame_idx+1] = green;
+                    frame_buf[frame_idx+2] = blue;
+                end
+                if (red != 8'd0 || green != 8'd0 || blue != 8'd0)
+                    frame_nonblack = frame_nonblack + 1;
+                frame_hash = (frame_hash ^ {24'd0, red})   * 32'h01000193;
+                frame_hash = (frame_hash ^ {24'd0, green}) * 32'h01000193;
+                frame_hash = (frame_hash ^ {24'd0, blue})  * 32'h01000193;
+                frame_x = frame_x + 1;
+            end
+            if (frame_lhbl_prev && !LHBL) begin
+                if (frame_x > frame_w) frame_w = frame_x;
+                if (frame_x > 0) frame_y = frame_y + 1;
+                frame_x = 0;
+            end
+            if (frame_lvbl_prev && !LVBL) begin
+                frame_h = (frame_y > FRAME_MAX_H) ? FRAME_MAX_H : frame_y;
+                if (frame_w > FRAME_MAX_W) frame_w = FRAME_MAX_W;
+                if (frame_w > 0 && frame_h > 0 &&
+                    frame_ord >= frame_first && frame_ord <= frame_last &&
+                    ((frame_ord - frame_first) % frame_stride) == 0)
+                    frame_emit;
+                frame_receipt_line;
+                frame_ord = frame_ord + 1;
+                frame_x = 0;
+                frame_y = 0;
+                frame_w = 0;
+                frame_nonblack = 0;
+                frame_hash = 32'h811c9dc5;
+                frame_hld = 0;
+                frame_vld = 0;
+                frame_vsteps = 0;
+                frame_vmin = 1000; frame_vmax = 0;
+                frame_hmin = 1000; frame_hmax = 0;
+                if (frame_stop > 0 && frame_ord >= frame_stop) begin
+                    if (frame_receipt_fd != 0) $fclose(frame_receipt_fd);
+                    frame_receipt_fd = 0;
+                    if (dma_trace_enabled && dma_trace_fd != 0) begin
+                        $fclose(dma_trace_fd);
+                        dma_trace_fd = 0;
+                        dma_trace_enabled = 1'b0;
+                    end
+                    $display("ESCAPE KIDS FRAME CAPTURE DONE frames=%0d", frame_ord);
+                    $finish;
+                end
+            end
+            frame_lhbl_prev = LHBL;
+            frame_lvbl_prev = LVBL;
+        end
+    end
 
     // Optional phase-edge diagnostic.  JTKCPU's internal clken is the 1x
     // state-update/memory-consume phase; sampling its rising edge avoids
@@ -531,7 +995,7 @@ module tb_escape_kids_full_smoke;
         reg [7:0] tdata;
         reg [3:0] tdevice;
         begin
-            if (trace_enabled && !rst &&
+            if (trace_enabled && !rst && frame_ord >= trace_start_frame &&
                 (trace_limit == 0 || trace_seq < trace_limit) &&
                 dut.u_game.u_main.dtack &&
                 (dut.u_game.u_main.u_cpu.u_memctrl.mem_en || dut.u_game.u_main.cpu_we)) begin
@@ -564,7 +1028,7 @@ module tb_escape_kids_full_smoke;
                           dut.u_game.u_main.tilesys_cs ? 2 : 0;
                 if (^tdata === 1'bx)
                     $fwrite(trace_fd,
-                        "{\"schema\":\"mister-bus-jsonl-v1\",\"seq\":%0d,\"cpu\":0,\"event\":\"bus\",\"pc\":%0d,\"rw\":\"%s\",\"address\":%0d,\"data\":0,\"lanes\":1,\"device\":%0d,\"x\":true,\"sample_cpu_we\":%b,\"sample_mem_en\":%b,\"sample_clken\":%b,\"sample_clken2\":%b,\"sample_mem_we\":%b,\"sample_mem_addr\":%0d,\"sample_dtack\":%b,\"sample_stack_busy\":%b,\"sample_psh_dec\":%b,\"sample_fetch\":%b,\"sample_opd\":%b,\"sample_wrq\":%b,\"sample_is_op\":%b,\"sample_mem_busy\":%b}\n",
+                        "{\"schema\":\"mister-bus-jsonl-v1\",\"seq\":%0d,\"cpu\":0,\"event\":\"bus\",\"pc\":%0d,\"rw\":\"%s\",\"address\":%0d,\"data\":0,\"lanes\":1,\"device\":%0d,\"x\":true,\"sample_cpu_we\":%b,\"sample_mem_en\":%b,\"sample_clken\":%b,\"sample_clken2\":%b,\"sample_mem_we\":%b,\"sample_mem_addr\":%0d,\"sample_dtack\":%b,\"sample_stack_busy\":%b,\"sample_psh_dec\":%b,\"sample_fetch\":%b,\"sample_opd\":%b,\"sample_wrq\":%b,\"sample_is_op\":%b,\"sample_mem_busy\":%b,\"cc\":%0d,\"irqn_ff\":%b,\"irqen\":%b,\"irq_mx\":%b,\"dma_bsy\":%b}\n",
                         trace_seq, dut.u_game.u_main.u_cpu.pc,
                         dut.u_game.u_main.cpu_we ? "w" : "r",
                         dut.u_game.u_main.cpu_addr, tdevice,
@@ -581,10 +1045,15 @@ module tb_escape_kids_full_smoke;
                         dut.u_game.u_main.u_cpu.opd,
                         dut.u_game.u_main.u_cpu.wrq,
                         dut.u_game.u_main.u_cpu.is_op,
-                        dut.u_game.u_main.u_cpu.mem_busy);
+                        dut.u_game.u_main.u_cpu.mem_busy,
+                        dut.u_game.u_main.u_cpu.cc,
+                        dut.u_game.u_main.irqn_ff,
+                        dut.u_game.u_main.irqen,
+                        dut.u_game.u_main.irq_mx,
+                        dut.u_game.dma_bsy);
                 else
                     $fwrite(trace_fd,
-                        "{\"schema\":\"mister-bus-jsonl-v1\",\"seq\":%0d,\"cpu\":0,\"event\":\"bus\",\"pc\":%0d,\"rw\":\"%s\",\"address\":%0d,\"data\":%0d,\"lanes\":1,\"device\":%0d,\"x\":false,\"sample_cpu_we\":%b,\"sample_mem_en\":%b,\"sample_clken\":%b,\"sample_clken2\":%b,\"sample_mem_we\":%b,\"sample_mem_addr\":%0d,\"sample_dtack\":%b,\"sample_stack_busy\":%b,\"sample_psh_dec\":%b,\"sample_fetch\":%b,\"sample_opd\":%b,\"sample_wrq\":%b,\"sample_is_op\":%b,\"sample_mem_busy\":%b}\n",
+                        "{\"schema\":\"mister-bus-jsonl-v1\",\"seq\":%0d,\"cpu\":0,\"event\":\"bus\",\"pc\":%0d,\"rw\":\"%s\",\"address\":%0d,\"data\":%0d,\"lanes\":1,\"device\":%0d,\"x\":false,\"sample_cpu_we\":%b,\"sample_mem_en\":%b,\"sample_clken\":%b,\"sample_clken2\":%b,\"sample_mem_we\":%b,\"sample_mem_addr\":%0d,\"sample_dtack\":%b,\"sample_stack_busy\":%b,\"sample_psh_dec\":%b,\"sample_fetch\":%b,\"sample_opd\":%b,\"sample_wrq\":%b,\"sample_is_op\":%b,\"sample_mem_busy\":%b,\"cc\":%0d,\"irqn_ff\":%b,\"irqen\":%b,\"irq_mx\":%b,\"dma_bsy\":%b}\n",
                         trace_seq, dut.u_game.u_main.u_cpu.pc,
                         dut.u_game.u_main.cpu_we ? "w" : "r",
                         dut.u_game.u_main.cpu_addr, tdata, tdevice,
@@ -601,7 +1070,12 @@ module tb_escape_kids_full_smoke;
                         dut.u_game.u_main.u_cpu.opd,
                         dut.u_game.u_main.u_cpu.wrq,
                         dut.u_game.u_main.u_cpu.is_op,
-                        dut.u_game.u_main.u_cpu.mem_busy);
+                        dut.u_game.u_main.u_cpu.mem_busy,
+                        dut.u_game.u_main.u_cpu.cc,
+                        dut.u_game.u_main.irqn_ff,
+                        dut.u_game.u_main.irqen,
+                        dut.u_game.u_main.irq_mx,
+                        dut.u_game.dma_bsy);
                 trace_seq = trace_seq + 1;
                 trace_prev_addr = dut.u_game.u_main.cpu_addr;
                 trace_prev_write = dut.u_game.u_main.cpu_we;
@@ -671,6 +1145,7 @@ module tb_escape_kids_full_smoke;
         // start to the corresponding coin controls, while Japan uses the
         // cab_1p[1:0] start bits and keeps P3/P4 inactive.
         if (rst) begin
+            diag_cycle_count <= 0;
             scenario_cycle <= 0;
             input_scenario_done <= 1'b0;
             buserror_seen = 0;
@@ -687,6 +1162,15 @@ module tb_escape_kids_full_smoke;
             end else if (input_scenario) begin
                 cab_1p   <= 4'hf;
                 coin     <= 4'hf;
+                joystick1 <= 7'h7f;
+                joystick2 <= 7'h7f;
+                joystick3 <= 7'h7f;
+                joystick4 <= 7'h7f;
+                service  <= 1'b1;
+            end else if (coin_scenario) begin
+                cab_1p   <= 4'hf;
+                coin     <= 4'hf;
+                coin_prev <= 4'hf;
                 joystick1 <= 7'h7f;
                 joystick2 <= 7'h7f;
                 joystick3 <= 7'h7f;
@@ -812,7 +1296,55 @@ module tb_escape_kids_full_smoke;
                 14000000: input_scenario_done <= 1'b1;
                 default:;
             endcase
+        end else if (coin_scenario) begin
+            // Long-horizon coin-to-gameplay scenario: hold idle through boot
+            // and attract-mode stabilisation, pulse a single P1 coin edge at
+            // a VBlank-frame-counted point (frame counter is the existing
+            // `frames` reg, incremented later this same cycle -- using its
+            // pre-update value here is fine, the coin pulse spans many
+            // frames so a one-cycle skew is immaterial), hold it for
+            // coin_hold_frames frames, then release and go fully idle again
+            // so the DUT free-runs through Konami's character-select
+            // auto-timeout, ticket animation and color-assign screens on its
+            // own, exactly like the MAME reference scenario documented in
+            // .mister/scenario-briefs/coin-to-gameplay.md section 6 (no
+            // Start button on esckids4p; a manual confirm input was not
+            // determined, so this deliberately relies on the timeout path).
+            cab_1p    <= 4'hf;
+            joystick1 <= 7'h7f;
+            joystick2 <= 7'h7f;
+            joystick3 <= 7'h7f;
+            joystick4 <= 7'h7f;
+            service   <= 1'b1;
+            // Gate on lvbl_falls (a genuine once-per-real-video-frame,
+            // edge-detected counter, unconditionally maintained a few lines
+            // below and NOT gated behind -FrameDir), not the legacy `frames`
+            // reg.  `frames` (line ~1291, `!rst && !LVBL && HS`) is a level
+            // check evaluated every clock, so it increments many times per
+            // real video frame instead of once -- confirmed empirically this
+            // session (SMOKE_WRAM_TRACE showed `frames` already past 67000
+            // within the first ~13 real frames).  That mismatch meant
+            // CoinFrame/CoinHoldFrames fired within the first real frame or
+            // two after reset, not at the intended Nth displayed frame, for
+            // every prior coin_scenario run this investigation used.  Using
+            // lvbl_falls makes CoinFrame/CoinHoldFrames mean what the
+            // scenario brief and CLI flags document: real displayed frames.
+            if (lvbl_falls >= coin_frame && lvbl_falls < coin_release_frame)
+                coin <= 4'b1110;
+            else
+                coin <= 4'hf;
+            // Prove at the DUT port that the scripted pulse actually
+            // asserted, independent of whether the CPU ever samples it.
+            // Diagnostic-only, emitted at most twice per run.
+            if (input_trace_enabled && coin !== coin_prev)
+                $fwrite(input_trace_fd,
+                    "{\"schema\":\"mister-input-jsonl-v1\",\"seq\":%0d,\"event\":\"coin_port_edge\",\"cycle\":%0d,\"frame\":%0d,\"coin\":%0d}\n",
+                    input_trace_seq, diag_cycle_count, lvbl_falls, coin);
+            if (coin !== coin_prev) input_trace_seq <= input_trace_seq + 1;
+            coin_prev <= coin;
         end
+        if (!rst)
+            diag_cycle_count <= diag_cycle_count + 1;
         if (stack_debug && !rst &&
             (dut.u_game.u_main.cpu_addr == 16'h07ff ||
              dut.u_game.u_main.u_cpu.u_memctrl.addr == 16'h07ff))
@@ -849,6 +1381,26 @@ module tb_escape_kids_full_smoke;
             dut.main_addr[12:0] !== dut.u_game.u_main.cpu_addr[12:0])
             $fatal(1,"Accepted work RAM address mismatch bram=%04h cpu=%04h",
                 dut.main_addr[12:0],dut.u_game.u_main.cpu_addr[12:0]);
+        // Diagnostic-only WRAM byte watch (see wram_trace_enabled declaration):
+        // passively observes accepted CPU work-RAM cycles at wram_watch_addr
+        // and emits an edge line whenever the byte value changes.  Read-only
+        // tap, no bus forcing, cannot affect PASS/FAIL.
+        if (wram_trace_enabled && !rst && dut.u_game.u_main.ram_cs &&
+            dut.u_game.u_main.u_cpu.cen_out && dut.u_game.u_main.dtack &&
+            dut.main_addr[12:0] == wram_watch_addr[12:0]) begin
+            reg [7:0] wram_watch_now;
+            wram_watch_now = dut.u_game.u_main.cpu_we ?
+                dut.u_game.u_main.cpu_dout : dut.u_game.u_main.cpu_din;
+            if (!wram_watch_valid || wram_watch_now !== wram_watch_last) begin
+                $fwrite(wram_trace_fd,
+                    "{\"schema\":\"mister-wram-jsonl-v1\",\"seq\":%0d,\"event\":\"wram_edge\",\"cycle\":%0d,\"frame\":%0d,\"address\":%0d,\"value\":%0d,\"write\":%0d}\n",
+                    wram_trace_seq, diag_cycle_count, lvbl_falls, wram_watch_addr,
+                    wram_watch_now, dut.u_game.u_main.cpu_we);
+                wram_trace_seq <= wram_trace_seq + 1;
+                wram_watch_last <= wram_watch_now;
+                wram_watch_valid <= 1'b1;
+            end
+        end
         if (input_trace_enabled && !rst && dut.u_game.u_main.u_cpu.cen_out &&
             dut.u_game.u_main.dtack && !dut.u_game.u_main.cpu_we &&
             ((dut.u_game.u_main.cpu_addr >= 16'h3f80 &&
@@ -857,7 +1409,7 @@ module tb_escape_kids_full_smoke;
              dut.u_game.u_main.cpu_addr == 16'h3f93)) begin
             $fwrite(input_trace_fd,
                 "{\"schema\":\"mister-input-jsonl-v1\",\"seq\":%0d,\"event\":\"input_read\",\"cycle\":%0d,\"address\":%0d,\"data\":%0d,\"cab_1p\":%0d,\"coin\":%0d,\"joystick1\":%0d,\"joystick2\":%0d,\"joystick3\":%0d,\"joystick4\":%0d,\"service\":%0d}\n",
-                input_trace_seq, scenario_cycle, dut.u_game.u_main.cpu_addr,
+                input_trace_seq, diag_cycle_count, dut.u_game.u_main.cpu_addr,
                 dut.u_game.u_main.cpu_din, cab_1p, coin, joystick1,
                 joystick2, joystick3, joystick4, service);
             input_trace_seq <= input_trace_seq + 1;
@@ -976,7 +1528,11 @@ module tb_escape_kids_full_smoke;
         if (dut.u_game.u_main.u_cpu.buserror)
             $display("CPU-BUSERROR t=%0t pc=%h addr=%h op=%h din=%h dtack=%b", $time, dut.u_game.u_main.u_cpu.pc, dut.u_game.u_main.u_cpu.addr, dut.u_game.u_main.u_cpu.op, dut.u_game.u_main.cpu_din, dut.u_game.u_main.u_cpu.dtack);
 `endif
-        if (!rst &&
+        // Frame capture owns the stop condition when it is enabled; the
+        // ordinary barrier would terminate long before the boot self-test
+        // screens are reachable.  Default-off, so no existing lane changes.
+        if (!rst && !frame_capture &&
+            !(snd_trace_enabled && snd_stop_frame > 0 && lvbl_falls < snd_stop_frame) &&
             ((input_scenario && input_scenario_done && input_reads >= input_min_reads &&
               frames > 2 && samples > 8 && rom_reads > 8) ||
              (!service_gate_enabled && !raster_enabled && !input_scenario && barrier_frame &&
@@ -995,6 +1551,15 @@ module tb_escape_kids_full_smoke;
             if (input_trace_enabled) begin
                 $fclose(input_trace_fd);
                 input_trace_enabled = 1'b0;
+            end
+            if (wram_trace_enabled) begin
+                $fclose(wram_trace_fd);
+                wram_trace_enabled = 1'b0;
+            end
+            if (dma_trace_enabled && dma_trace_fd != 0) begin
+                $fclose(dma_trace_fd);
+                dma_trace_fd = 0;
+                dma_trace_enabled = 1'b0;
             end
             $finish;
         end
@@ -1278,6 +1843,89 @@ module tb_escape_kids_full_smoke;
                 dut.u_game.u_main.cpu_din);
     end
 
+    // Sound register-stream trace (see declarations above). Every event is
+    // qualified either by an accepted-cycle enable (main CPU side) or a
+    // rising-edge detector (Z80 strobes), so each hardware access logs once.
+    wire snd_fm_wr  = dut.u_game.u_sound.fm_cs  && !dut.u_game.u_sound.wr_n;
+    wire snd_pcm_wr = dut.u_game.u_sound.pcm_cs && !dut.u_game.u_sound.wr_n;
+    wire snd_pcm_rd_all = dut.u_game.u_sound.pcm_cs && !dut.u_game.u_sound.rd_n;
+    wire snd_pcm_rd = snd_pcm_rd_all && dut.u_game.u_sound.A[5:1] == 5'd0;
+    wire snd_main_acc = dut.u_game.u_main.u_cpu.cen_out &&
+                        dut.u_game.u_main.dtack;
+    always @(posedge clk) begin
+        if (snd_trace_enabled && !rst) begin
+            if (snd_fm_wr && !snd_fm_wr_prev) begin
+                $fwrite(snd_trace_fd,
+                    "{\"schema\":\"esckids-snd-v1\",\"seq\":%0d,\"e\":\"ym\",\"frame\":%0d,\"cyc\":%0d,\"a0\":%0d,\"d\":%0d}\n",
+                    snd_trace_seq, lvbl_falls, diag_cycle_count,
+                    dut.u_game.u_sound.A[0], dut.u_game.u_sound.cpu_dout);
+                snd_trace_seq = snd_trace_seq + 1;
+                snd_ym_total = snd_ym_total + 1;
+            end
+            if (snd_pcm_wr && !snd_pcm_wr_prev) begin
+                $fwrite(snd_trace_fd,
+                    "{\"schema\":\"esckids-snd-v1\",\"seq\":%0d,\"e\":\"pcm\",\"frame\":%0d,\"cyc\":%0d,\"a\":%0d,\"d\":%0d}\n",
+                    snd_trace_seq, lvbl_falls, diag_cycle_count,
+                    dut.u_game.u_sound.A[5:0], dut.u_game.u_sound.cpu_dout);
+                snd_trace_seq = snd_trace_seq + 1;
+                snd_pcm_total = snd_pcm_total + 1;
+            end
+            if (snd_main_acc && dut.u_game.u_main.snd_cs &&
+                dut.u_game.u_main.cpu_we) begin
+                $fwrite(snd_trace_fd,
+                    "{\"schema\":\"esckids-snd-v1\",\"seq\":%0d,\"e\":\"m2s\",\"frame\":%0d,\"cyc\":%0d,\"a0\":%0d,\"d\":%0d}\n",
+                    snd_trace_seq, lvbl_falls, diag_cycle_count,
+                    dut.u_game.u_main.cpu_addr[0], dut.u_game.u_main.cpu_dout);
+                snd_trace_seq = snd_trace_seq + 1;
+            end
+            if (snd_main_acc && dut.u_game.u_main.snd_irq) begin
+                $fwrite(snd_trace_fd,
+                    "{\"schema\":\"esckids-snd-v1\",\"seq\":%0d,\"e\":\"irq\",\"frame\":%0d,\"cyc\":%0d,\"rw\":\"%s\"}\n",
+                    snd_trace_seq, lvbl_falls, diag_cycle_count,
+                    dut.u_game.u_main.cpu_we ? "w" : "r");
+                snd_trace_seq = snd_trace_seq + 1;
+            end
+            if (!dut.u_game.u_sound.nmi_n && snd_nmi_prev)
+                snd_nmi_count = snd_nmi_count + 1;
+            if (snd_pcm_rd && !snd_pcm_rd_prev)
+                snd_latch_rd_count = snd_latch_rd_count + 1;
+            // Log individual Z80-side K053260 reads of the low registers
+            // (0-3: main->sub mailbox and sub->main echo) with the data the
+            // chip returned; logged at strobe end so pcm_dout is settled.
+            if (!snd_pcm_rd_all && snd_pcm_rd_all_prev &&
+                snd_pcm_rd_addr <= 6'd3) begin
+                $fwrite(snd_trace_fd,
+                    "{\"schema\":\"esckids-snd-v1\",\"seq\":%0d,\"e\":\"pcr\",\"frame\":%0d,\"cyc\":%0d,\"a\":%0d,\"d\":%0d}\n",
+                    snd_trace_seq, lvbl_falls, diag_cycle_count,
+                    snd_pcm_rd_addr, dut.u_game.u_sound.pcm_dout);
+                snd_trace_seq = snd_trace_seq + 1;
+            end
+            if (snd_pcm_rd_all) snd_pcm_rd_addr <= dut.u_game.u_sound.A[5:0];
+            snd_pcm_rd_all_prev <= snd_pcm_rd_all;
+            if (snd_frame_lvbl_prev && !LVBL) begin
+                $fwrite(snd_trace_fd,
+                    "{\"schema\":\"esckids-snd-v1\",\"seq\":%0d,\"e\":\"frame\",\"frame\":%0d,\"nmi\":%0d,\"latch_rd\":%0d,\"ym_total\":%0d,\"pcm_total\":%0d}\n",
+                    snd_trace_seq, lvbl_falls, snd_nmi_count,
+                    snd_latch_rd_count, snd_ym_total, snd_pcm_total);
+                snd_trace_seq = snd_trace_seq + 1;
+                snd_nmi_count = 0;
+                snd_latch_rd_count = 0;
+            end
+            snd_fm_wr_prev  <= snd_fm_wr;
+            snd_pcm_wr_prev <= snd_pcm_wr;
+            snd_pcm_rd_prev <= snd_pcm_rd;
+            snd_nmi_prev    <= dut.u_game.u_sound.nmi_n;
+            snd_frame_lvbl_prev <= LVBL;
+            if (snd_stop_frame > 0 && lvbl_falls >= snd_stop_frame) begin
+                $fclose(snd_trace_fd);
+                snd_trace_enabled = 1'b0;
+                $display("ESCAPE KIDS SND TRACE DONE frames=%0d ym=%0d pcm=%0d",
+                    lvbl_falls, snd_ym_total, snd_pcm_total);
+                $finish;
+            end
+        end
+    end
+
     initial begin
         loader_writes = 0;
         rom_reads = 0;
@@ -1316,9 +1964,17 @@ module tb_escape_kids_full_smoke;
         input_min_reads = 0;
         input_scenario = $test$plusargs("SMOKE_INPUT_SCENARIO");
         input_scenario_done = 1'b0;
+        coin_scenario = $test$plusargs("SMOKE_COIN_SCENARIO");
+        if (!$value$plusargs("SMOKE_COIN_FRAME=%d", coin_frame))
+            coin_frame = 620;
+        if (!$value$plusargs("SMOKE_COIN_HOLD_FRAMES=%d", coin_hold_frames))
+            coin_hold_frames = 10;
+        coin_release_frame = coin_frame + coin_hold_frames;
         input_trace_file = "";
         input_trace_fd = 0;
         input_trace_enabled = 1'b0;
+        wram_trace_fd = 0;
+        wram_trace_enabled = 1'b0;
         service_gate_scenario = "";
         service_gate_trace_file = "";
         service_gate_final_file = "";
@@ -1373,6 +2029,53 @@ module tb_escape_kids_full_smoke;
         raster_shadow[12] = 8'd0;
         workram_contract = $test$plusargs("SMOKE_WORKRAM_CONTRACT");
         workram_alias_inject = $test$plusargs("SMOKE_WORKRAM_ALIAS_INJECT");
+        dma_trace_file = "";
+        dma_trace_fd = 0;
+        dma_trace_enabled = 1'b0;
+        snd_trace_file = "";
+        snd_trace_fd = 0;
+        snd_trace_enabled = 1'b0;
+        snd_stop_frame = 0;
+        snd_trace_seq = 0;
+        snd_fm_wr_prev = 1'b0;
+        snd_pcm_wr_prev = 1'b0;
+        snd_pcm_rd_prev = 1'b0;
+        snd_nmi_prev = 1'b1;
+        snd_frame_lvbl_prev = 1'b0;
+        snd_pcm_rd_all_prev = 1'b0;
+        snd_pcm_rd_addr = 6'd0;
+        snd_nmi_count = 0;
+        snd_latch_rd_count = 0;
+        snd_ym_total = 0;
+        snd_pcm_total = 0;
+        frame_capture = 1'b0;
+        frame_dir = "";
+        frame_path = "";
+        frame_receipt_file = "";
+        frame_receipt_fd = 0;
+        frame_first = 0;
+        frame_last = 0;
+        frame_stride = 1;
+        frame_stop = 0;
+        frame_ord = 0;
+        frame_x = 0;
+        frame_y = 0;
+        frame_w = 0;
+        frame_h = 0;
+        frame_fd = 0;
+        frame_idx = 0;
+        frame_nonblack = 0;
+        frame_hash = 32'h811c9dc5;
+        frame_lvbl_prev = 1'b0;
+        frame_lhbl_prev = 1'b0;
+        frame_hld = 0;
+        frame_vld = 0;
+        frame_vsteps = 0;
+        frame_vmin = 1000; frame_vmax = 0;
+        frame_hmin = 1000; frame_hmax = 0;
+        frame_vprev = 9'h1ff;
+        frame_hld_prev = 1'b0;
+        frame_vld_prev = 1'b0;
         buserror_trace_file = "";
         buserror_trace_fd = 0;
         buserror_seen = 0;
@@ -1391,11 +2094,19 @@ module tb_escape_kids_full_smoke;
 `endif
         if ($value$plusargs("SMOKE_AUTH_STREAM=%s", auth_stream_file))
             auth_mode = 1'b1;
+`ifdef AUTH_MEDIA
+        // The physical four-bank model must start fully defined, otherwise
+        // any read outside the loaded MRA stream returns X (Icarus) or an
+        // --x-initial pattern (Verilator) and poisons the video path.
+        for (i = 0; i < 33554432; i = i + 1) media[i] = 8'h00;
+`else
         for (i = 0; i < 1048576; i = i + 1) media[i] = 8'h00;
+`endif
         if (!$value$plusargs("SMOKE_MAIN=%s", media_file))
             media_file = ".mister/mame/main.hex";
         if (!$value$plusargs("SMOKE_CYCLES=%d", max_cycles))
             max_cycles = 5000;
+        $display("ESCAPE KIDS SMOKE_CYCLES_PARSED max_cycles=%0d", max_cycles);
         if (!$value$plusargs("SMOKE_BARRIER=%s", smoke_barrier))
             smoke_barrier = "cpu_sound";
         if (!$value$plusargs("SMOKE_CABINET_2P=%d", smoke_cabinet_2p))
@@ -1410,6 +2121,8 @@ module tb_escape_kids_full_smoke;
             trace_limit = 0;
         if (!$value$plusargs("SMOKE_TRACE_MIN=%d", trace_min_events))
             trace_min_events = 0;
+        if (!$value$plusargs("SMOKE_TRACE_START_FRAME=%d", trace_start_frame))
+            trace_start_frame = 0;
         if (!$value$plusargs("SMOKE_INPUT_MIN=%d", input_min_reads))
             input_min_reads = 0;
         if ($value$plusargs("SMOKE_INPUT_TRACE=%s", input_trace_file)) begin
@@ -1417,6 +2130,16 @@ module tb_escape_kids_full_smoke;
             if (input_trace_fd == 0)
                 $fatal(1, "Cannot open smoke input trace %0s", input_trace_file);
             input_trace_enabled = 1'b1;
+        end
+        wram_watch_addr = 16'h0002;
+        if ($value$plusargs("SMOKE_WRAM_ADDR=%d", wram_watch_addr)) ;
+        if ($value$plusargs("SMOKE_WRAM_TRACE=%s", wram_trace_file)) begin
+            wram_trace_fd = $fopen(wram_trace_file, "w");
+            if (wram_trace_fd == 0)
+                $fatal(1, "Cannot open smoke WRAM trace %0s", wram_trace_file);
+            wram_trace_enabled = 1'b1;
+            wram_watch_valid = 1'b0;
+            wram_trace_seq = 0;
         end
         if ($value$plusargs("SMOKE_SERVICE_GATE_SCENARIO=%s", service_gate_scenario)) begin
             service_gate_enabled = 1'b1;
@@ -1454,8 +2177,53 @@ module tb_escape_kids_full_smoke;
             joystick4 = 7'h7f;
             service = 1'b1;
         end
+        if ($value$plusargs("SMOKE_FRAME_DIR=%s", frame_dir)) begin
+            frame_capture = 1'b1;
+            if (!$value$plusargs("SMOKE_FRAME_FIRST=%d", frame_first))
+                frame_first = 0;
+            if (!$value$plusargs("SMOKE_FRAME_LAST=%d", frame_last))
+                frame_last = 1000000;
+            if (!$value$plusargs("SMOKE_FRAME_STRIDE=%d", frame_stride))
+                frame_stride = 1;
+            if (frame_stride < 1) frame_stride = 1;
+            if (!$value$plusargs("SMOKE_FRAME_STOP=%d", frame_stop))
+                frame_stop = 0;
+            if ($value$plusargs("SMOKE_FRAME_RECEIPT=%s", frame_receipt_file)) begin
+                frame_receipt_fd = $fopen(frame_receipt_file, "w");
+                if (frame_receipt_fd == 0)
+                    $fatal(1, "Cannot open frame receipt %0s", frame_receipt_file);
+            end
+        end
+        // jtframe_debug_keys drives gfx_en=4'hf on real hardware whenever the
+        // debug key path is not compiled in, so every layer is enabled.  The
+        // harness historically tied it to 0, which force-blanks lyrf/lyra/
+        // lyrb and the sprite layer and makes any video observation useless.
+        // Existing lanes keep the historical 0 unless they ask otherwise.
+        if ($value$plusargs("SMOKE_GFX_EN=%d", i))
+            gfx_en = i[3:0];
+        else if (frame_capture)
+            gfx_en = 4'hf;
         if (!$value$plusargs("SMOKE_BUSERROR_TRACE=%s", buserror_trace_file))
             buserror_trace_file = "";
+        if ($value$plusargs("SMOKE_DMA_TRACE=%s", dma_trace_file)) begin
+            dma_trace_fd = $fopen(dma_trace_file, "w");
+            if (dma_trace_fd == 0)
+                $fatal(1, "Cannot open smoke DMA trace %0s", dma_trace_file);
+            dma_trace_enabled = 1'b1;
+            dma_slot_watch[0] = 8'd1;
+            dma_slot_watch[1] = 8'd2;
+            dma_slot_watch[2] = 8'd4;
+            dma_slot_watch[3] = 8'd8;
+            dma_slot_watch[4] = 8'd9;
+        end
+        if ($value$plusargs("SMOKE_SND_TRACE=%s", snd_trace_file)) begin
+            snd_trace_fd = $fopen(snd_trace_file, "w");
+            if (snd_trace_fd == 0)
+                $fatal(1, "Cannot open smoke sound trace %0s", snd_trace_file);
+            snd_trace_enabled = 1'b1;
+        end
+        if (!$value$plusargs("SMOKE_SND_STOP_FRAME=%d", snd_stop_frame))
+            snd_stop_frame = 0;
         if ($test$plusargs("SMOKE_TRACE_PHASE"))
             trace_phase = 1'b1;
         barrier_frame = smoke_barrier == "frame";
@@ -1487,7 +2255,29 @@ module tb_escape_kids_full_smoke;
         rst24 <= 1'b0;
         rst48 <= 1'b0;
         rst96 <= 1'b0;
-        repeat (max_cycles) @(posedge clk);
+        // Not a bare `repeat (max_cycles)`: Verilator's repeat-count
+        // implementation truncates a longint expression to 32 bits
+        // internally, so any SMOKE_CYCLES value above 2^32 silently wraps
+        // (measured: requesting 6,000,000,000 actually ran only
+        // 1,705,032,704 cycles == 6e9 mod 2^32, landing the deep coin400
+        // capture 487 native frames short of its target).
+        //
+        // A single explicit `for (cyc_i=0; cyc_i<max_cycles; ...)
+        // @(posedge clk);` loop was tried and measured to change behavior:
+        // it desynchronized the concurrent raster/service-gate completion
+        // checkers from this main sequencer (regression ladder went from
+        // full_smoke_pass/service_gate_pass/raster_pass to
+        // timeout_or_failure on every "frame"-barrier lane, both sets).
+        // Root cause not pinned down, so instead of an unproven equivalent
+        // construct, nested `repeat` is used: each individual repeat count
+        // stays under 2^31-1 (Verilator's known-safe range) by chunking, so
+        // every repeat call site keeps the exact original, already-proven
+        // `repeat (N) @(posedge clk);` scheduling behavior; only the
+        // chunk/remainder bookkeeping is new.
+        cyc_chunks    = max_cycles / SMOKE_CYCLE_CHUNK;
+        cyc_remainder = max_cycles % SMOKE_CYCLE_CHUNK;
+        repeat (cyc_chunks) repeat (SMOKE_CYCLE_CHUNK) @(posedge clk);
+        repeat (cyc_remainder) @(posedge clk);
         if (service_gate_enabled)
             service_gate_finalize(1'b0, "timeout before target");
         if (raster_enabled)

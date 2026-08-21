@@ -129,12 +129,25 @@ generate
         wire [AW-1:0] sh0_rdmx, sh1_rdmx;
         wire [SW-1:0] shdout0,shdout1;
         reg  [SW-1:0] shdin;
-        reg           newwe_l, we_l, sh_we;
+        reg           newwe_l, we_l, sh_we, sh_line;
+        wire          sh_we_epoch;
 
         assign sh0_rdmx  =  line ? wr_af   : rd_addr;
         assign sh1_rdmx  = ~line ? wr_af   : rd_addr;
-        assign sh0_wemx  =  line & sh_we;
-        assign sh1_wemx  = ~line & sh_we;
+        // The shadow RMW path is delayed by one clock (shdin/sh_wa/sh_we
+        // below), so the actual RAM write below fires one cycle after the
+        // pixel event that produced it. If `line` toggles (LHBL fall) in
+        // that intervening cycle, gating the write mux on the CURRENT,
+        // un-registered `line` would silently retarget the write into the
+        // wrong ping-pong half. Carry the producer's `line` epoch alongside
+        // the write (sh_line) and only commit when it still matches the
+        // current `line`; a genuine epoch mismatch drops the late write
+        // instead of corrupting the other half. Cross-referenced against
+        // the same hazard shape found and fixed in the Bucky sibling core's
+        // k053247_buffer.v (cores/bucky/hdl/k053247_buffer.v, r_shline).
+        assign sh_we_epoch = sh_we & (sh_line == line);
+        assign sh0_wemx  =  line & sh_we_epoch;
+        assign sh1_wemx  = ~line & sh_we_epoch;
         assign sh0_delmx = ~line & delete_we;
         assign sh1_delmx =  line & delete_we;
 
@@ -142,9 +155,10 @@ generate
         assign add_shade   =  shade & we     && is_just_a_shadow;
 
         always @(posedge clk) begin
-            shdin <= wr_data[DW-1-:SW];
-            sh_wa <= wr_af;
-            sh_we <= add_shade || erase_shade;
+            shdin   <= wr_data[DW-1-:SW];
+            sh_wa   <= wr_af;
+            sh_we   <= add_shade || erase_shade;
+            sh_line <= line;
         end
         assign dump_data[DW-1-:SW] = ~line ? shdout0 : shdout1;
 

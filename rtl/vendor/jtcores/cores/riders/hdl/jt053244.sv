@@ -124,6 +124,7 @@ jt053244_scan #(.HFLIP_OFFSET(HFLIP_OFFSET), .GX975(GX975)
     .dr_busy   ( dr_busy    ),
     .debug_bus ( debug_bus  )
     ,.gx975     ( gx975_en   )
+    ,.gx975_raw ( gx975      )
 );
 
 jt053246_dma u_dma(
@@ -135,6 +136,11 @@ jt053246_dma u_dma(
     .dma_en     ( dma_en    ),
     .dma_trig   ( dma_trig  ),
     .k44_en     ( 1'b1      ),   // enable k053244/5 mode (default k053246/7)
+    // GX975 (Escape Kids) drives a 053246-style 256-entry sprite LUT
+    // through the k44 register interface: MAME vendetta.cpp copies 0x800
+    // words (256 entries) per vblank DMA.  The raw gx975 strap is used,
+    // not gx975_en, because the table size does not depend on cfg[3].
+    .lut256     ( gx975     ),
     .simson     ( 1'b0      ),
 
     .hs         ( hs        ),

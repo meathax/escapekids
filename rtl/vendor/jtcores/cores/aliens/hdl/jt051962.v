@@ -141,10 +141,25 @@ jtframe_vtimer #(
     .VS         ( vs_int        )
 );
 
+// Vertical domain of the K052109/K051962 line counter, mirrored from the
+// jtframe_vtimer parameters below so the EXT_TIMING look-ahead wraps correctly.
+localparam [8:0] EXT_V_START  = 9'h0F8,
+                 EXT_VCNT_END = 9'h1FF;
+
+// The K053252 exposes only load pulses, so the esckids bridge reconstructs a
+// single line counter.  jtframe_vtimer keeps vrender 1 line and vrender1 2
+// lines ahead of vdump for tile/sprite fetch look-ahead; rebuild that here
+// with an explicit wrap, since a plain 9-bit +1 would roll 0x1FF to 0x000.
+wire [8:0] ext_vrender  = ext_vdump==EXT_VCNT_END ? EXT_V_START :
+                                                    ext_vdump + 9'd1;
+wire [8:0] ext_vrender1 = ext_vdump >= EXT_VCNT_END-9'd1 ?
+                          ext_vdump - (EXT_VCNT_END-EXT_V_START-9'd1) :
+                          ext_vdump + 9'd2;
+
 assign hdump   = EXT_TIMING && ext_en ? ext_hdump  : hdump_int;
 assign vdump   = EXT_TIMING && ext_en ? ext_vdump  : vdump_int;
-assign vrender = EXT_TIMING && ext_en ? ext_vdump  : vrender_int;
-assign vrender1= EXT_TIMING && ext_en ? ext_vdump  : vrender1_int;
+assign vrender = EXT_TIMING && ext_en ? ext_vrender  : vrender_int;
+assign vrender1= EXT_TIMING && ext_en ? ext_vrender1 : vrender1_int;
 assign lhbl    = EXT_TIMING && ext_en ? ext_lhbl   : lhbl_int;
 assign lvbl    = EXT_TIMING && ext_en ? ext_lvbl   : lvbl_int;
 assign hs      = EXT_TIMING && ext_en ? ext_hs     : hs_int;
