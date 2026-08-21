@@ -111,17 +111,27 @@ endfunction
 // row = 8 pixels), the MAME xoffset pattern selects, for pixel s=0..7, the
 // nibble at nibble-index {2,3,0,1,6,7,4,5}[s] (byte pair swapped, nibble
 // order preserved within each byte). This function re-packs those 8 nibbles
-// into the bit-planar layout jtframe_draw natively expects, so downstream
-// hflip/SWAPH pixel-shift logic is unaffected and unmodified.
+// into the bit-planar layout jtframe_draw natively expects.
+//
+// Bit order within each plane byte: this module drives jtframe_objdraw with
+// .hflip(~hflip) (donor 053244/5 ROM convention), so for an UNFLIPPED sprite
+// jtframe_draw runs its hflip==1 path, emitting plane bit 7 first and shifting
+// left. The screen-leftmost pixel of the fetch must therefore sit in bit 7 of
+// each plane byte (p0 at bit 7 ... p7 at bit 0). The original packing put p0
+// at bit 0, which made every 8-pixel fetch come out horizontally mirrored in
+// place: coin -> symmetric speckled blob, drop shadow -> "bowtie", INSERT
+// COIN glyphs mirrored, character sprites doubled-arm composites (directed
+// identity-ROM testbench rtl/esckids/verify/tb_esckids_obj_ghost.sv: 160/160
+// pens reversed per 8-pixel group before this fix, 160/160 correct after).
 function [31:0] gx975_unswizzle(input [31:0] d);
     reg [3:0] p0,p1,p2,p3,p4,p5,p6,p7;
     begin
         p0 = d[11:8];  p1 = d[15:12]; p2 = d[3:0];   p3 = d[7:4];
         p4 = d[27:24]; p5 = d[31:28]; p6 = d[19:16]; p7 = d[23:20];
-        gx975_unswizzle[7:0]   = {p7[0],p6[0],p5[0],p4[0],p3[0],p2[0],p1[0],p0[0]};
-        gx975_unswizzle[15:8]  = {p7[1],p6[1],p5[1],p4[1],p3[1],p2[1],p1[1],p0[1]};
-        gx975_unswizzle[23:16] = {p7[2],p6[2],p5[2],p4[2],p3[2],p2[2],p1[2],p0[2]};
-        gx975_unswizzle[31:24] = {p7[3],p6[3],p5[3],p4[3],p3[3],p2[3],p1[3],p0[3]};
+        gx975_unswizzle[7:0]   = {p0[0],p1[0],p2[0],p3[0],p4[0],p5[0],p6[0],p7[0]};
+        gx975_unswizzle[15:8]  = {p0[1],p1[1],p2[1],p3[1],p4[1],p5[1],p6[1],p7[1]};
+        gx975_unswizzle[23:16] = {p0[2],p1[2],p2[2],p3[2],p4[2],p5[2],p6[2],p7[2]};
+        gx975_unswizzle[31:24] = {p0[3],p1[3],p2[3],p3[3],p4[3],p5[3],p6[3],p7[3]};
     end
 endfunction
 
