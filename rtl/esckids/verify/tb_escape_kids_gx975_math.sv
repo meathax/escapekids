@@ -38,8 +38,11 @@ module tb_escape_kids_gx975_math;
         hw_enable=0; xoffset=0;
         check(0,0,16'h0100,12'h020,10'h100,12'h020);
         check(0,1,16'h0100,12'h040,10'h300,12'h040);
-        check(1,0,16'h0100,12'h020,10'h081,12'h041);
-        check(1,1,16'h0100,12'h020,10'h1ff,12'h041);
+        // hzoom = raw<<1 uniformly (special-case raw==0x020 patch removed;
+        // see rtl/esckids/verify/tb_esckids_obj_zoom.sv for the full sweep
+        // proof against MAME's real reciprocal zoom formula).
+        check(1,0,16'h0100,12'h020,10'h081,12'h040);
+        check(1,1,16'h0100,12'h020,10'h1ff,12'h040);
         check(1,0,16'h0101,12'h040,10'h081,12'h080);
         check(1,1,16'h01ff,12'h010,10'h180,12'h020);
 

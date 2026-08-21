@@ -27,9 +27,21 @@ module escape_kids_gx975_math(
             x_start = flip_x ? -flipped_x[9:0] : half_x;
         if (!enable)
             hzoom = zoom_in;
-        else begin
+        else
+            // GX975 (Escape Kids) horizontal zoom register is reciprocal in
+            // MAME (k053246_k053247_k055673.h,
+            // k053247_draw_single_sprite_gxcore): zoomx=(0x400000+(raw>>1))/raw,
+            // then halved again unconditionally for Escape Kids
+            // (objset1 bit3, == this gx975_path). jtframe_draw's own
+            // hz_cnt/HZONE accumulator is independently reciprocal in hzoom
+            // (S=HZONE/hzoom), so the two reciprocals compose into a single
+            // exact linear map: hzoom = 2*raw, uniformly for every raw code.
+            // (Verified: rtl/esckids/verify/tb_esckids_obj_zoom.sv sweeps
+            // raw=1..0x3ff against the real MAME formula above.) A prior
+            // hard-coded raw==0x020 -> hzoom=0x041 exception broke this
+            // uniformity at exactly one raw value, producing a one-frame
+            // discontinuity every time the coin-icon animation's zoom
+            // register passed through 0x020 - the jagged/notched disc edge.
             hzoom = zoom_in << 1;
-            if (zoom_in == 12'h020) hzoom = 12'h041;
-        end
     end
 endmodule

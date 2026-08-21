@@ -253,13 +253,25 @@ always @(posedge clk, posedge rst) begin
                     y <=  y+yadj;
                     vzoom <= scan_even[11:0];
                     if( gx975_path ) begin
-                        // MAME's GX975 path halves the inverse horizontal
-                        // scale, equivalent to doubling JTFRAME's zoom step.
-                        // Keep the transformed sprite on the zoom path even
-                        // when the source step is unity.
+                        // MAME's GX975 zoom register is reciprocal
+                        // (k053246_k053247_k055673.h,
+                        // k053247_draw_single_sprite_gxcore):
+                        //   zoomx = raw ? (0x400000+(raw>>1))/raw : 0x800000;
+                        //   if( objset1[3] ) zoomx >>= 1;   // Escape Kids only
+                        // jtframe_draw's own hz_cnt/HZONE accumulator is
+                        // independently reciprocal in hzoom (its long-run
+                        // scale factor is HZONE/hzoom), so the two
+                        // reciprocals compose into one exact, raw-uniform
+                        // linear map: hzoom = raw<<1 for every raw code,
+                        // with no exceptions (verified against the real
+                        // MAME formula above by sweeping raw=1..0x3ff in
+                        // rtl/esckids/verify/tb_esckids_obj_zoom.sv). A
+                        // former hard-coded raw==0x020 -> hzoom=0x041
+                        // special case broke that uniformity at exactly one
+                        // raw value, producing a one-frame discontinuity
+                        // every time a sprite's zoom register swept through
+                        // 0x020 - the coin-icon's jagged/notched disc edge.
                         hzoom <= (sq ? scan_even[11:0] : scan_odd[11:0]) << 1;
-                        if( (sq ? scan_even[11:0] : scan_odd[11:0]) == 12'h020 )
-                            hzoom <= 12'h041;
                     end else begin
                         hzoom <= sq ? scan_even[11:0] : scan_odd[11:0];
                     end
