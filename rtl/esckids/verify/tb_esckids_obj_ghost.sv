@@ -79,8 +79,19 @@ function [15:0] pen8; // pens for H half: {pen(s=3..0)} packed 4x4 helper unused
     input dummy; pen8 = 0;
 endfunction
 
-// raw MAME-format dword for fetch: nibble n holds pen of MAME screen pixel s
-// with n = {2,3,0,1,6,7,4,5}[s]
+// raw MAME-format dword for fetch, encoded with MAME's REAL gfx bit-offset
+// semantics (k053246_k053247_k055673.cpp spritelayout + drawgfx readbit):
+//   xoffset[s] = {2*4,3*4,0*4,1*4,6*4,7*4,4*4,5*4}, planeoffset {0,1,2,3},
+//   readbit(src,off) = src[off/8] & (0x80 >> off%8)  -- MSB-first per byte,
+//   plane p contributes pen bit (3-p).
+// So bit offset 4n lands in region byte n>>1, HIGH nibble when n is even,
+// LOW nibble when n is odd, and each nibble holds the pen value as-is
+// (offset+0 = pen MSB = nibble MSB). With the 32-bit fetch d = little-endian
+// region bytes {B3,B2,B1,B0} (proven: this exact convention byte-for-byte
+// reproduces the live Verilator frame captures), pen of screen pixel s sits
+// at nibble {3,2,1,0,7,6,5,4}[s] of d. Exhaustively cross-checked in Python
+// against MAME's decode of all 524288 rows of the real 4MB sprite region:
+// zero mismatches.
 function [31:0] raw_rom(input Hbit);
     reg [3:0] pen [0:7];
     integer s;
@@ -88,14 +99,14 @@ function [31:0] raw_rom(input Hbit);
     begin
         for(s=0;s<8;s=s+1) pen[s] = 4'd1 + ((({3'd0,Hbit}*8)+s) % 14);
         r = 0;
-        r[11: 8] = pen[0]; // nib2
-        r[15:12] = pen[1]; // nib3
-        r[ 3: 0] = pen[2]; // nib0
-        r[ 7: 4] = pen[3]; // nib1
-        r[27:24] = pen[4]; // nib6
-        r[31:28] = pen[5]; // nib7
-        r[19:16] = pen[6]; // nib4
-        r[23:20] = pen[7]; // nib5
+        r[15:12] = pen[0]; // xoffset 2*4 -> byte1 high nibble
+        r[11: 8] = pen[1]; // xoffset 3*4 -> byte1 low  nibble
+        r[ 7: 4] = pen[2]; // xoffset 0*4 -> byte0 high nibble
+        r[ 3: 0] = pen[3]; // xoffset 1*4 -> byte0 low  nibble
+        r[31:28] = pen[4]; // xoffset 6*4 -> byte3 high nibble
+        r[27:24] = pen[5]; // xoffset 7*4 -> byte3 low  nibble
+        r[23:20] = pen[6]; // xoffset 4*4 -> byte2 high nibble
+        r[19:16] = pen[7]; // xoffset 5*4 -> byte2 low  nibble
         raw_rom = r;
     end
 endfunction
@@ -104,8 +115,8 @@ endfunction
 function [31:0] gx975_unswizzle(input [31:0] d);
     reg [3:0] p0,p1,p2,p3,p4,p5,p6,p7;
     begin
-        p0 = d[11:8];  p1 = d[15:12]; p2 = d[3:0];   p3 = d[7:4];
-        p4 = d[27:24]; p5 = d[31:28]; p6 = d[19:16]; p7 = d[23:20];
+        p0 = d[15:12]; p1 = d[11:8];  p2 = d[7:4];   p3 = d[3:0];
+        p4 = d[31:28]; p5 = d[27:24]; p6 = d[23:20]; p7 = d[19:16];
         gx975_unswizzle[7:0]   = {p0[0],p1[0],p2[0],p3[0],p4[0],p5[0],p6[0],p7[0]};
         gx975_unswizzle[15:8]  = {p0[1],p1[1],p2[1],p3[1],p4[1],p5[1],p6[1],p7[1]};
         gx975_unswizzle[23:16] = {p0[2],p1[2],p2[2],p3[2],p4[2],p5[2],p6[2],p7[2]};

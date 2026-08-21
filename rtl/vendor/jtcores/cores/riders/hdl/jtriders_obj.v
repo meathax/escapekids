@@ -108,10 +108,25 @@ endfunction
 //   charincrement 128*8 (128 bytes/tile, matching the esckids linear
 //   code*128 addressing already used above)
 // For one 32-bit fetch (bytes d[7:0]/d[15:8]/d[23:16]/d[31:24] = half a tile
-// row = 8 pixels), the MAME xoffset pattern selects, for pixel s=0..7, the
-// nibble at nibble-index {2,3,0,1,6,7,4,5}[s] (byte pair swapped, nibble
-// order preserved within each byte). This function re-packs those 8 nibbles
-// into the bit-planar layout jtframe_draw natively expects.
+// row = 8 pixels), MAME's xoffset {2*4,3*4,0*4,1*4,6*4,7*4,4*4,5*4} is a BIT
+// offset table read with drawgfx's MSB-first readbit convention
+// (src[off/8] & (0x80 >> off%8), plane p -> pen bit 3-p). Bit offset 4n
+// therefore lands in region byte n>>1, in the HIGH nibble when n is even and
+// the LOW nibble when n is odd, with the nibble holding the pen value as-is.
+// Composed with the little-endian 32-bit fetch, screen pixel s=0..7 takes the
+// nibble at d[4*{3,2,1,0,7,6,5,4}[s] +: 4]: within each 16-bit word the HIGH
+// byte's two pixels come first, high nibble before low - i.e. the OBJ ROM
+// data bus shifts the high byte lane out first, big-endian pixel order inside
+// each little-endian-stored word (consistent with MAME's ROM_LOAD64_WORD
+// region build for the 975c04-07 ROMs). Proven exhaustively: a Python decode
+// of all 524288 rows of the real interleaved 4MB sprite region with MAME's
+// exact readbit algorithm matches this mapping with zero mismatches, and the
+// same model byte-for-byte reproduces live Verilator frame captures. An
+// earlier revision used nibble-index {2,3,0,1,6,7,4,5} directly (LSB-first
+// nibble numbering) which swapped every adjacent pixel pair: INSERT COIN
+// glyphs garbled with doubled verticals, coin disc and drop shadow scrambled,
+// US flag star field and stripes broken. This function re-packs the 8 pixel
+// nibbles into the bit-planar layout jtframe_draw natively expects.
 //
 // Bit order within each plane byte: this module drives jtframe_objdraw with
 // .hflip(~hflip) (donor 053244/5 ROM convention), so for an UNFLIPPED sprite
@@ -126,8 +141,8 @@ endfunction
 function [31:0] gx975_unswizzle(input [31:0] d);
     reg [3:0] p0,p1,p2,p3,p4,p5,p6,p7;
     begin
-        p0 = d[11:8];  p1 = d[15:12]; p2 = d[3:0];   p3 = d[7:4];
-        p4 = d[27:24]; p5 = d[31:28]; p6 = d[19:16]; p7 = d[23:20];
+        p0 = d[15:12]; p1 = d[11:8];  p2 = d[7:4];   p3 = d[3:0];
+        p4 = d[31:28]; p5 = d[27:24]; p6 = d[23:20]; p7 = d[19:16];
         gx975_unswizzle[7:0]   = {p0[0],p1[0],p2[0],p3[0],p4[0],p5[0],p6[0],p7[0]};
         gx975_unswizzle[15:8]  = {p0[1],p1[1],p2[1],p3[1],p4[1],p5[1],p6[1],p7[1]};
         gx975_unswizzle[23:16] = {p0[2],p1[2],p2[2],p3[2],p4[2],p5[2],p6[2],p7[2]};
