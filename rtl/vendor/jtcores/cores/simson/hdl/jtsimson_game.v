@@ -67,7 +67,177 @@ initial begin
 end
 `endif
 
-assign debug_view = debug_mux;
+// ===========================================================================
+// TEMPORARY paged hardware bring-up diagnostic (Escape Kids boot black-screen)
+// ---------------------------------------------------------------------------
+// Established on real hardware so far: PLL/SDRAM/reset/download all healthy;
+// esckids=1 (profile correct, so the hardware-only donor rst8 hold at
+// jtsimson_main.v:540-544 is masked); VBL timing runs; the game emits no
+// non-black pixel; and SDRAM bank0 (CPU program ROM) goes idle while the
+// tile/sprite/sound banks keep streaming. That reads as: the CPU stops making
+// progress early and never reaches video init.
+//
+// Rather than rebuilding an RBF per question, this exports 16 pages of 4 bits
+// through the existing JTFRAME debug_view overlay row. The displayed byte is
+// {page[3:0], payload[3:0]}, so the overlay's hex readout is literally "PX"
+// with P = page number and X = that page's nibble - directly readable from a
+// screenshot, no bit counting. Pages advance automatically every ~0.70 s
+// (2^25 clk48), so one ~12 s capture sweeps all 16 pages; no keyboard needed.
+//
+// Pages 8..B report a snapshot of the CPU address bus and C..F the physical
+// program-ROM address, so a stalled CPU's location can be read straight off
+// the screen as hex digits and disassembled from the ROM.
+//
+// "act" = happened at least once during the previous page period (still live).
+// "ever" = sticky since reset (how far boot ever got).
+//
+// Pages run 1..F, never 0: the overlay row hides itself when the whole byte is
+// zero, and page 0 with an all-zero payload is precisely the "CPU completely
+// dead" case that must stay visible.
+//
+//   page 1 : main_cs_act | main_ok_act | main_cs_stuck | cpu_addr_changing
+//            main_cs_act=1 with main_ok_act=0 -> CPU wedged waiting on ROM.
+//            main_cs_stuck=1 -> chip select held high a whole period, no data.
+//            cpu_addr_changing=0 -> CPU is not advancing at all.
+//   page 2 : rgb_nz | lvbl_act | lhbl_act | pxl_cen_act      (video output)
+//   page 3 : pal_we_ever | tilesys_cs_ever | objsys_cs_ever | k053252_cs_ever
+//   page 4 : pcu_cs_ever | objreg_cs_ever | main_fmcs_ever | rmrd_ever
+//            pages 3-4 show exactly how far the boot sequence ever got.
+//   page 5 : irq_act | firq_act | nmi_act | cpu_we_act       (interrupts/writes)
+//   page 6 : rst8 (live) | init (live) | dma_bsy_act | snd_irq_act
+//   page 7 : snd_cs_act | snd_ok_act | lyrf_cs_act | lyro_cs_act
+//   page 8 : main_ok_ever | cpu_we_ever | pal_bank (live) | video_bank (live)
+//   page 9 : cpu_addr[15:12]      page A : cpu_addr[11:8]
+//   page B : cpu_addr[7:4]        page C : cpu_addr[3:0]
+//   page D : {0, main_rom_addr[18:16]}   page E : main_rom_addr[15:12]
+//   page F : main_rom_addr[11:8]
+//
+// Restore to `assign debug_view = debug_mux;` before a release build.
+localparam DBG_PGW = 25;                 // ~0.70 s per page at 48 MHz
+
+reg  [DBG_PGW-1:0] dbg_pgcnt = 0;
+reg  [ 3:0] dbg_page  = 1;              // 1..F, never 0 (see note above)
+reg  [ 3:0] dbg_payload;
+reg  [15:0] dbg_s_cpu_addr = 0, dbg_cpu_addr_l = 0;
+reg  [18:0] dbg_s_rom_addr = 0;
+
+// per-period activity accumulators
+reg dbg_a_maincs=0, dbg_a_maincs_lo=0, dbg_a_mainok=0, dbg_a_addrchg=0;
+reg dbg_a_rgbnz=0,  dbg_a_vblhi=0, dbg_a_vbllo=0, dbg_a_hblhi=0, dbg_a_hbllo=0;
+reg dbg_a_pxlcen=0, dbg_a_cpuwe=0, dbg_a_dma=0,   dbg_a_sndirq=0;
+reg dbg_a_irqhi=0,  dbg_a_irqlo=0, dbg_a_firqhi=0,dbg_a_firqlo=0;
+reg dbg_a_nmihi=0,  dbg_a_nmilo=0;
+reg dbg_a_sndcs=0,  dbg_a_sndok=0, dbg_a_lyrf=0,  dbg_a_lyro=0;
+// latched-for-display versions
+reg dbg_l_maincs=0, dbg_l_mainok=0, dbg_l_stuck=0, dbg_l_addrchg=0;
+reg dbg_l_rgbnz=0,  dbg_l_vbl=0,    dbg_l_hbl=0,   dbg_l_pxlcen=0;
+reg dbg_l_irq=0,    dbg_l_firq=0,   dbg_l_nmi=0,   dbg_l_cpuwe=0;
+reg dbg_l_dma=0,    dbg_l_sndirq=0, dbg_l_sndcs=0, dbg_l_sndok=0;
+reg dbg_l_lyrf=0,   dbg_l_lyro=0;
+// sticky "ever" flags - how far the boot sequence ever got
+reg dbg_e_palwe=0,  dbg_e_tilesys=0, dbg_e_objsys=0, dbg_e_k053252=0;
+reg dbg_e_pcu=0,    dbg_e_objreg=0,  dbg_e_fmcs=0,   dbg_e_rmrd=0;
+reg dbg_e_mainok=0, dbg_e_cpuwe=0;
+
+wire dbg_pgend    = &dbg_pgcnt;
+wire dbg_active_px= LVBL & LHBL & pxl_cen & (|{red,green,blue});
+
+always @(posedge clk48) begin
+    if( rst48 ) begin
+        dbg_e_palwe<=0; dbg_e_tilesys<=0; dbg_e_objsys<=0; dbg_e_k053252<=0;
+        dbg_e_pcu  <=0; dbg_e_objreg <=0; dbg_e_fmcs  <=0; dbg_e_rmrd   <=0;
+        dbg_e_mainok<=0;dbg_e_cpuwe  <=0;
+    end else begin
+        if( pal_we     ) dbg_e_palwe   <= 1'b1;
+        if( tilesys_cs ) dbg_e_tilesys <= 1'b1;
+        if( objsys_cs  ) dbg_e_objsys  <= 1'b1;
+        if( k053252_cs ) dbg_e_k053252 <= 1'b1;
+        if( pcu_cs     ) dbg_e_pcu     <= 1'b1;
+        if( objreg_cs  ) dbg_e_objreg  <= 1'b1;
+        if( main_fmcs  ) dbg_e_fmcs    <= 1'b1;
+        if( rmrd       ) dbg_e_rmrd    <= 1'b1;
+        if( main_ok    ) dbg_e_mainok  <= 1'b1;
+        if( cpu_we     ) dbg_e_cpuwe   <= 1'b1;
+    end
+
+    dbg_cpu_addr_l <= cpu_addr;
+    dbg_pgcnt      <= dbg_pgcnt + { {DBG_PGW-1{1'b0}}, 1'b1 };
+
+    if(  main_cs   ) dbg_a_maincs    <= 1'b1;
+    if( !main_cs   ) dbg_a_maincs_lo <= 1'b1;
+    if(  main_ok   ) dbg_a_mainok    <= 1'b1;
+    if( cpu_addr!=dbg_cpu_addr_l ) dbg_a_addrchg <= 1'b1;
+    if( dbg_active_px ) dbg_a_rgbnz  <= 1'b1;
+    if(  LVBL ) dbg_a_vblhi <= 1'b1;
+    if( !LVBL ) dbg_a_vbllo <= 1'b1;
+    if(  LHBL ) dbg_a_hblhi <= 1'b1;
+    if( !LHBL ) dbg_a_hbllo <= 1'b1;
+    if( pxl_cen ) dbg_a_pxlcen <= 1'b1;
+    if( cpu_we  ) dbg_a_cpuwe  <= 1'b1;
+    if( dma_bsy ) dbg_a_dma    <= 1'b1;
+    if( snd_irq ) dbg_a_sndirq <= 1'b1;
+    if(  cpu_irqn ) dbg_a_irqhi  <= 1'b1;
+    if( !cpu_irqn ) dbg_a_irqlo  <= 1'b1;
+    if(  cpu_firqn) dbg_a_firqhi <= 1'b1;
+    if( !cpu_firqn) dbg_a_firqlo <= 1'b1;
+    if(  cpu_nmin ) dbg_a_nmihi  <= 1'b1;
+    if( !cpu_nmin ) dbg_a_nmilo  <= 1'b1;
+    if( snd_cs  ) dbg_a_sndcs <= 1'b1;
+    if( snd_ok  ) dbg_a_sndok <= 1'b1;
+    if( lyrf_cs ) dbg_a_lyrf  <= 1'b1;
+    if( lyro_cs ) dbg_a_lyro  <= 1'b1;
+
+    if( dbg_pgend ) begin
+        dbg_page      <= dbg_page==4'hf ? 4'h1 : dbg_page + 4'd1;
+        // main_cs held high for a whole period with no data returned
+        dbg_l_stuck   <= dbg_a_maincs & ~dbg_a_maincs_lo & ~dbg_a_mainok;
+        dbg_l_maincs  <= dbg_a_maincs;   dbg_l_mainok <= dbg_a_mainok;
+        dbg_l_addrchg <= dbg_a_addrchg;  dbg_l_rgbnz  <= dbg_a_rgbnz;
+        dbg_l_vbl     <= dbg_a_vblhi & dbg_a_vbllo;
+        dbg_l_hbl     <= dbg_a_hblhi & dbg_a_hbllo;
+        dbg_l_pxlcen  <= dbg_a_pxlcen;   dbg_l_cpuwe  <= dbg_a_cpuwe;
+        dbg_l_irq     <= dbg_a_irqhi  & dbg_a_irqlo;
+        dbg_l_firq    <= dbg_a_firqhi & dbg_a_firqlo;
+        dbg_l_nmi     <= dbg_a_nmihi  & dbg_a_nmilo;
+        dbg_l_dma     <= dbg_a_dma;      dbg_l_sndirq <= dbg_a_sndirq;
+        dbg_l_sndcs   <= dbg_a_sndcs;    dbg_l_sndok  <= dbg_a_sndok;
+        dbg_l_lyrf    <= dbg_a_lyrf;     dbg_l_lyro   <= dbg_a_lyro;
+
+        {dbg_a_maincs,dbg_a_maincs_lo,dbg_a_mainok,dbg_a_addrchg} <= 4'd0;
+        {dbg_a_rgbnz,dbg_a_vblhi,dbg_a_vbllo,dbg_a_hblhi}         <= 4'd0;
+        {dbg_a_hbllo,dbg_a_pxlcen,dbg_a_cpuwe,dbg_a_dma}          <= 4'd0;
+        {dbg_a_sndirq,dbg_a_irqhi,dbg_a_irqlo,dbg_a_firqhi}       <= 4'd0;
+        {dbg_a_firqlo,dbg_a_nmihi,dbg_a_nmilo,dbg_a_sndcs}        <= 4'd0;
+        {dbg_a_sndok,dbg_a_lyrf,dbg_a_lyro}                       <= 3'd0;
+
+        // snapshot each address just before the pages that display it
+        if( dbg_page==4'h8 ) dbg_s_cpu_addr <= cpu_addr;
+        if( dbg_page==4'hc ) dbg_s_rom_addr <= main_rom_addr;
+    end
+end
+
+always @(*) begin
+    case( dbg_page )
+        4'h1: dbg_payload = { dbg_l_maincs, dbg_l_mainok, dbg_l_stuck, dbg_l_addrchg };
+        4'h2: dbg_payload = { dbg_l_rgbnz,  dbg_l_vbl,    dbg_l_hbl,   dbg_l_pxlcen  };
+        4'h3: dbg_payload = { dbg_e_palwe,  dbg_e_tilesys,dbg_e_objsys,dbg_e_k053252 };
+        4'h4: dbg_payload = { dbg_e_pcu,    dbg_e_objreg, dbg_e_fmcs,  dbg_e_rmrd    };
+        4'h5: dbg_payload = { dbg_l_irq,    dbg_l_firq,   dbg_l_nmi,   dbg_l_cpuwe   };
+        4'h6: dbg_payload = { rst8,         init,         dbg_l_dma,   dbg_l_sndirq  };
+        4'h7: dbg_payload = { dbg_l_sndcs,  dbg_l_sndok,  dbg_l_lyrf,  dbg_l_lyro    };
+        4'h8: dbg_payload = { dbg_e_mainok, dbg_e_cpuwe,  pal_bank,    video_bank    };
+        4'h9: dbg_payload = dbg_s_cpu_addr[15:12];
+        4'ha: dbg_payload = dbg_s_cpu_addr[11: 8];
+        4'hb: dbg_payload = dbg_s_cpu_addr[ 7: 4];
+        4'hc: dbg_payload = dbg_s_cpu_addr[ 3: 0];
+        4'hd: dbg_payload = { 1'b0, dbg_s_rom_addr[18:16] };
+        4'he: dbg_payload = dbg_s_rom_addr[15:12];
+        4'hf: dbg_payload = dbg_s_rom_addr[11: 8];
+        default: dbg_payload = 4'd0;
+    endcase
+end
+
+assign debug_view = { dbg_page, dbg_payload };
 assign ram_din    = cpu_dout;
 assign ioctl_din  = video_dump;
 assign video_dumpa= ioctl_addr[15:0]-16'h80;
