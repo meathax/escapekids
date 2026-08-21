@@ -72,7 +72,11 @@ assign volume   = { mmr[7][6:0] };
 assign tst_mode = tst_en && TESTRD==1;
 
 assign nx_pitch_cnt = {1'd0, pitch_cnt } + 13'd1;
-assign nibble       = adpcm_cnt^swap ? rom_data[7:4] : rom_data[3:0];
+// KDSC decodes the low nybble first, then the high nybble of each byte,
+// regardless of the reverse (swap) bit; only the byte address direction
+// changes in reverse mode (MAME k053260.cpp KDSC_Voice::play).  keyon sets
+// adpcm_cnt=1, so adpcm_cnt==1 selects the first (low) nybble.
+assign nibble       = adpcm_cnt ? rom_data[3:0] : rom_data[7:4];
 assign sample       = nx_pitch_cnt[12] & cen;
 assign svl          = {1'b0, vol_l[13-:7]};
 assign svr          = {1'b0, vol_r[13-:7]};
