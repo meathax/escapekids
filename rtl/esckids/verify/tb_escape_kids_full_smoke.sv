@@ -2226,6 +2226,8 @@ module tb_escape_kids_full_smoke;
             snd_stop_frame = 0;
         if ($test$plusargs("SMOKE_TRACE_PHASE"))
             trace_phase = 1'b1;
+        if ($test$plusargs("SMOKE_HW_DEBUG"))
+            status[11] = 1'b1;
         barrier_frame = smoke_barrier == "frame";
         repeat (16) @(posedge clk);
         if (auth_mode) begin

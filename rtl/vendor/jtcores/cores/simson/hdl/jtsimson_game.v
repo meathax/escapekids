@@ -31,12 +31,18 @@ wire [ 7:0] k053252_dout;
 wire [ 7:0] tilesys_dout, objsys_dout,
             obj_dout, pal_dout, cpu_dout,
             st_main, st_video, st_snd;
-wire        tilesys_rom_dtack;
-// TEMPORARY diagnostic taps from jtsimson_main - see its port list
-wire        dbg_berr_l, dbg_dtack, dbg_eep_rdy;
-wire [15:0] dbg_pcbad;
-wire [ 7:0] dbg_aupper;
+wire        tilesys_rom_dtack, main_cpu_ok;
+wire        dbg_trap_seen, dbg_berr_l, dbg_buserror, dbg_dtack, dbg_eep_rdy;
 wire [15:0] cpu_addr;
+wire [15:0] dbg_pc, dbg_pcbad, dbg_trap_pc, dbg_trap_addr,
+            dbg_hist_pc, dbg_hist_addr, dbg_accept_count;
+wire [ 7:0] dbg_cpu_din, dbg_aupper, dbg_last_op,
+            dbg_trap_op, dbg_trap_data, dbg_trap_flags,
+            dbg_hist_op, dbg_hist_data, dbg_hist_flags, dbg_cpu_reg_byte;
+wire [ 7:0] core_red, core_green, core_blue;
+wire [ 7:0] dbg_video_ever, dbg_sound_ever;
+wire [15:0] dbg_palette_writes, dbg_sound_events, dbg_audio_nonzero;
+wire [ 3:0] dbg_hist_index, dbg_reg_index, dbg_hist_wr;
 wire [12:0] ram_addr;
 wire [18:0] main_rom_addr;
 wire [15:0] video_dumpa;
@@ -55,6 +61,7 @@ wire [ 6:0] input_joystick1, input_joystick2,
             input_joystick3, input_joystick4;
 reg  [ 3:0] pcm_bsy_d;
 reg  [ 7:0] debug_mux;
+wire [ 7:0] hw_debug_view;
 reg         simson, paroda, vendetta, suratk, esckids, cabinet_2p;
 
 `ifdef SIMULATION
@@ -71,125 +78,10 @@ initial begin
 end
 `endif
 
-// ===========================================================================
-// TEMPORARY paged hardware bring-up diagnostic (Escape Kids boot black-screen)
-// ---------------------------------------------------------------------------
-// ROOT CAUSE FOUND (see .mister/iteration-log.jsonl
-// hw-overlay-pass3-root-cause-cpu-halted-on-latched-buserror): the main KCPU
-// is permanently halted by a latched bus error (jtsimson_main.v:413 `berr_l`,
-// wired straight into jtkcpu's .halt). berr_l is set by `buserror`, a
-// microcode-raised illegal-opcode trap, and never clears. CPU was captured
-// frozen at cpu_addr=0x8058, 0x1F bytes past its own reset vector (0x8039),
-// with main_cs/main_ok both healthy (memory path fine, CPU just isn't
-// advancing) and every video chip select still at "never touched" - hence
-// perfect video timing with an all-black picture.
-//
-// Open question this pass answers: does hardware return different ROM data
-// than the file at the trap address (a memory-path/SDRAM bug), or does the
-// CPU reach a real illegal opcode in the actual ROM (a jtkcpu ucode gap)?
-// Pages 7-A capture the exact PC latched at the trap (pcbad) and B-C the
-// live ROM byte the frozen CPU is reading (main_data) - compare that byte
-// against the ROM file at the pcbad/cpu_addr location to settle it.
-//
-// Exports 15 pages of 4 bits through the existing JTFRAME debug_view overlay
-// row. Displayed byte = {page[3:0], payload[3:0]}, so the overlay's hex
-// readout is literally "PX" - P = page, X = nibble - directly readable from
-// a screenshot. Pages advance every ~0.70 s (2^25 clk48); a ~10.5 s capture
-// sweeps all 15; no keyboard needed. Pages run 1..F, never 0: the overlay
-// hides the row on an all-zero byte, and page 0 with a zero payload is
-// exactly the "CPU completely dead" case that must stay visible.
-//
-//   page 1 : main_cs_act | main_ok_act | main_cs_stuck | cpu_addr_changing
-//            main_cs_act=1 with main_ok_act=0 -> CPU wedged waiting on ROM.
-//            main_cs_stuck=1 -> chip select held high a whole period, no data.
-//            cpu_addr_changing=0 -> CPU is not advancing at all (established).
-//   page 2 : berr_l | dtack (live) | eep_rdy (live) | const 1 (readout marker)
-//            berr_l=1 confirms the halt mechanism directly.
-//   page 3 : cpu_addr[15:12]   page 4 : cpu_addr[11:8]
-//   page 5 : cpu_addr[7:4]     page 6 : cpu_addr[3:0]
-//   page 7 : pcbad[15:12]      page 8 : pcbad[11:8]
-//   page 9 : pcbad[7:4]        page A : pcbad[3:0]
-//            PC latched at the trap - pin the exact offending instruction.
-//   page B : main_data[7:4]    page C : main_data[3:0]
-//            live ROM byte the frozen CPU is reading right now.
-//   page D : aupper[7:4]       page E : aupper[3:0]
-//            jtkcpu's own bank/page register - confirms it is not the reason
-//            the CPU landed in the wrong region.
-//   page F : rgb_nz | lvbl_act | lhbl_act | pxl_cen_act      (video sanity)
-//
-// Restore to `assign debug_view = debug_mux;` before a release build, and
-// remove the dbg_* port group from jtsimson_main.v (search "dbg_" there).
-localparam DBG_PGW = 25;                 // ~0.70 s per page at 48 MHz
-
-reg  [DBG_PGW-1:0] dbg_pgcnt = 0;
-reg  [ 3:0] dbg_page  = 1;              // 1..F, never 0 (see note above)
-reg  [ 3:0] dbg_payload;
-reg  [15:0] dbg_cpu_addr_l = 0;
-
-// per-period activity accumulators
-reg dbg_a_maincs=0, dbg_a_maincs_lo=0, dbg_a_mainok=0, dbg_a_addrchg=0;
-reg dbg_a_rgbnz=0,  dbg_a_vblhi=0, dbg_a_vbllo=0, dbg_a_hblhi=0, dbg_a_hbllo=0;
-reg dbg_a_pxlcen=0;
-// latched-for-display versions
-reg dbg_l_maincs=0, dbg_l_mainok=0, dbg_l_stuck=0, dbg_l_addrchg=0;
-reg dbg_l_rgbnz=0,  dbg_l_vbl=0,    dbg_l_hbl=0,   dbg_l_pxlcen=0;
-
-wire dbg_pgend    = &dbg_pgcnt;
-wire dbg_active_px= LVBL & LHBL & pxl_cen & (|{red,green,blue});
-
-always @(posedge clk48) begin
-    dbg_cpu_addr_l <= cpu_addr;
-    dbg_pgcnt      <= dbg_pgcnt + { {DBG_PGW-1{1'b0}}, 1'b1 };
-
-    if(  main_cs   ) dbg_a_maincs    <= 1'b1;
-    if( !main_cs   ) dbg_a_maincs_lo <= 1'b1;
-    if(  main_ok   ) dbg_a_mainok    <= 1'b1;
-    if( cpu_addr!=dbg_cpu_addr_l ) dbg_a_addrchg <= 1'b1;
-    if( dbg_active_px ) dbg_a_rgbnz  <= 1'b1;
-    if(  LVBL ) dbg_a_vblhi <= 1'b1;
-    if( !LVBL ) dbg_a_vbllo <= 1'b1;
-    if(  LHBL ) dbg_a_hblhi <= 1'b1;
-    if( !LHBL ) dbg_a_hbllo <= 1'b1;
-    if( pxl_cen ) dbg_a_pxlcen <= 1'b1;
-
-    if( dbg_pgend ) begin
-        dbg_page      <= dbg_page==4'hf ? 4'h1 : dbg_page + 4'd1;
-        // main_cs held high for a whole period with no data returned
-        dbg_l_stuck   <= dbg_a_maincs & ~dbg_a_maincs_lo & ~dbg_a_mainok;
-        dbg_l_maincs  <= dbg_a_maincs;   dbg_l_mainok <= dbg_a_mainok;
-        dbg_l_addrchg <= dbg_a_addrchg;  dbg_l_rgbnz  <= dbg_a_rgbnz;
-        dbg_l_vbl     <= dbg_a_vblhi & dbg_a_vbllo;
-        dbg_l_hbl     <= dbg_a_hblhi & dbg_a_hbllo;
-        dbg_l_pxlcen  <= dbg_a_pxlcen;
-
-        {dbg_a_maincs,dbg_a_maincs_lo,dbg_a_mainok,dbg_a_addrchg} <= 4'd0;
-        {dbg_a_rgbnz,dbg_a_vblhi,dbg_a_vbllo,dbg_a_hblhi}         <= 4'd0;
-        {dbg_a_hbllo,dbg_a_pxlcen}                                <= 2'd0;
-    end
-end
-
-always @(*) begin
-    case( dbg_page )
-        4'h1: dbg_payload = { dbg_l_maincs, dbg_l_mainok,   dbg_l_stuck,  dbg_l_addrchg };
-        4'h2: dbg_payload = { dbg_berr_l,   dbg_dtack,      dbg_eep_rdy,  1'b1          };
-        4'h3: dbg_payload = cpu_addr[15:12];
-        4'h4: dbg_payload = cpu_addr[11: 8];
-        4'h5: dbg_payload = cpu_addr[ 7: 4];
-        4'h6: dbg_payload = cpu_addr[ 3: 0];
-        4'h7: dbg_payload = dbg_pcbad[15:12];
-        4'h8: dbg_payload = dbg_pcbad[11: 8];
-        4'h9: dbg_payload = dbg_pcbad[ 7: 4];
-        4'ha: dbg_payload = dbg_pcbad[ 3: 0];
-        4'hb: dbg_payload = main_data[ 7: 4];
-        4'hc: dbg_payload = main_data[ 3: 0];
-        4'hd: dbg_payload = dbg_aupper[ 7: 4];
-        4'he: dbg_payload = dbg_aupper[ 3: 0];
-        4'hf: dbg_payload = { dbg_l_rgbnz,  dbg_l_vbl,      dbg_l_hbl,    dbg_l_pxlcen  };
-        default: dbg_payload = 4'd0;
-    endcase
-end
-
-assign debug_view = { dbg_page, dbg_payload };
+// Escape Kids diagnostics are boot-visible by design.  The black-screen
+// failure prevents relying on the OSD status write that formerly enabled this
+// path; page and history-slot selection remain status-controlled below.
+assign debug_view = esckids ? hw_debug_view : debug_mux;
 assign ram_din    = cpu_dout;
 assign ioctl_din  = video_dump;
 assign video_dumpa= ioctl_addr[15:0]-16'h80;
@@ -211,6 +103,192 @@ assign pcm_schedule_a = pcm_bsy_d[0] ? pcm_raw_addr_a : pcm_start_a;
 assign pcm_schedule_b = pcm_bsy_d[1] ? pcm_raw_addr_b : pcm_start_b;
 assign pcm_schedule_c = pcm_bsy_d[2] ? pcm_raw_addr_c : pcm_start_c;
 assign pcm_schedule_d = pcm_bsy_d[3] ? pcm_raw_addr_d : pcm_start_d;
+
+escape_kids_rom_ready u_main_rom_ready(
+    .clk        ( clk48         ),
+    .rst        ( rst48         ),
+    .enable     ( esckids       ),
+    .rom_cs     ( main_cs       ),
+    .rom_addr   ( main_rom_addr ),
+    .rom_ok     ( main_ok       ),
+    .cpu_rom_ok ( main_cpu_ok   )
+);
+
+escape_kids_hw_debug u_hw_debug(
+    .clk            ( clk48             ),
+    .rst            ( rst48             ),
+    .enable         ( esckids           ),
+    .page           ( status[27:23]     ),
+    .hist_sel       ( status[31:28]     ),
+    .live_pc        ( dbg_pc            ),
+    .pcbad          ( dbg_pcbad         ),
+    .live_addr      ( cpu_addr          ),
+    .last_op        ( dbg_last_op       ),
+    .cpu_din        ( dbg_cpu_din       ),
+    .rom_data       ( main_data         ),
+    .aupper         ( dbg_aupper        ),
+    .trap_pc        ( dbg_trap_pc       ),
+    .trap_addr      ( dbg_trap_addr     ),
+    .trap_op        ( dbg_trap_op       ),
+    .trap_data      ( dbg_trap_data     ),
+    .trap_flags     ( dbg_trap_flags    ),
+    .hist_pc        ( dbg_hist_pc       ),
+    .hist_addr      ( dbg_hist_addr     ),
+    .hist_op        ( dbg_hist_op       ),
+    .hist_data      ( dbg_hist_data     ),
+    .hist_flags     ( dbg_hist_flags    ),
+    .cpu_reg_byte   ( dbg_cpu_reg_byte  ),
+    .accept_count   ( dbg_accept_count  ),
+    .trap_seen      ( dbg_trap_seen     ),
+    .berr_l         ( dbg_berr_l        ),
+    .buserror       ( dbg_buserror      ),
+    .dtack          ( dbg_dtack         ),
+    .eep_rdy        ( dbg_eep_rdy       ),
+    .main_cs        ( main_cs           ),
+    .main_ok        ( main_ok           ),
+    .main_cpu_ok    ( main_cpu_ok       ),
+    .cpu_cen        ( cpu_cen           ),
+    .pal_we         ( pal_we            ),
+    .tilesys_cs     ( tilesys_cs        ),
+    .objsys_cs      ( objsys_cs         ),
+    .objreg_cs      ( objreg_cs         ),
+    .pcu_cs         ( pcu_cs            ),
+    .k053252_cs     ( k053252_cs        ),
+    .rmrd           ( rmrd              ),
+    .lvbl           ( LVBL              ),
+    .lhbl           ( LHBL              ),
+    .pxl_cen        ( pxl_cen           ),
+    .red            ( red               ),
+    .green          ( green             ),
+    .blue           ( blue              ),
+    .snd_cs         ( snd_cs            ),
+    .snd_ok         ( snd_ok            ),
+    .snd_irq        ( snd_irq           ),
+    .pcm_bsy        ( pcm_bsy           ),
+    .pcm_sample     ( pcm_sample        ),
+    .pcm_warm       ( pcm_prefetch_warm ),
+    .pcm_underrun   ( pcm_prefetch_underrun ),
+    .snd_l          ( snd_l             ),
+    .snd_r          ( snd_r             ),
+    .esckids        ( esckids           ),
+    .cabinet_2p     ( cabinet_2p        ),
+    .rst24          ( rst24             ),
+    .rst48          ( rst48             ),
+    .rst96          ( rst96             ),
+    .irq_n          ( cpu_irqn          ),
+    .firq_n         ( cpu_firqn         ),
+    .nmi_n          ( cpu_nmin          ),
+    .dma_bsy        ( dma_bsy           ),
+    .debug_view     ( hw_debug_view     ),
+    .video_ever     ( dbg_video_ever    ),
+    .sound_ever     ( dbg_sound_ever    ),
+    .palette_writes ( dbg_palette_writes),
+    .sound_events   ( dbg_sound_events  ),
+    .audio_nonzero  ( dbg_audio_nonzero )
+);
+
+escape_kids_debug_overlay u_debug_overlay(
+    .clk            ( clk48             ),
+    .rst            ( rst48             ),
+    .enable         ( esckids           ),
+    .slot           ( status[31:28]     ),
+    .pxl_cen        ( pxl_cen           ),
+    .lhbl           ( LHBL              ),
+    .lvbl           ( LVBL              ),
+    .core_red       ( core_red          ),
+    .core_green     ( core_green        ),
+    .core_blue      ( core_blue         ),
+    .live_pc        ( dbg_pc            ),
+    .pcbad          ( dbg_pcbad         ),
+    .live_addr      ( cpu_addr          ),
+    .last_op        ( dbg_last_op       ),
+    .cpu_din        ( dbg_cpu_din       ),
+    .rom_data       ( main_data         ),
+    .aupper         ( dbg_aupper        ),
+    .trap_pc        ( dbg_trap_pc       ),
+    .trap_addr      ( dbg_trap_addr     ),
+    .trap_op        ( dbg_trap_op       ),
+    .trap_data      ( dbg_trap_data     ),
+    .trap_flags     ( dbg_trap_flags    ),
+    .hist_pc        ( dbg_hist_pc       ),
+    .hist_addr      ( dbg_hist_addr     ),
+    .hist_op        ( dbg_hist_op       ),
+    .hist_data      ( dbg_hist_data     ),
+    .hist_flags     ( dbg_hist_flags    ),
+    .hist_wr        ( dbg_hist_wr       ),
+    .cpu_reg_byte   ( dbg_cpu_reg_byte  ),
+    .accept_count   ( dbg_accept_count  ),
+    .trap_seen      ( dbg_trap_seen     ),
+    .berr_l         ( dbg_berr_l        ),
+    .buserror       ( dbg_buserror      ),
+    .dtack          ( dbg_dtack         ),
+    .eep_rdy        ( dbg_eep_rdy       ),
+    .main_cs        ( main_cs           ),
+    .main_ok        ( main_ok           ),
+    .main_cpu_ok    ( main_cpu_ok       ),
+    .cpu_cen        ( cpu_cen           ),
+    .main_rom_addr  ( main_rom_addr     ),
+    .ram_addr       ( ram_addr          ),
+    .cpu_we         ( cpu_we            ),
+    .ram_we         ( ram_we            ),
+    .tilesys_cs     ( tilesys_cs        ),
+    .objsys_cs      ( objsys_cs         ),
+    .objreg_cs      ( objreg_cs         ),
+    .pcu_cs         ( pcu_cs            ),
+    .k053252_cs     ( k053252_cs        ),
+    .rmrd           ( rmrd              ),
+    .dma_bsy        ( dma_bsy           ),
+    .video_now      ( {LVBL,LHBL,pxl_cen,|{core_red,core_green,core_blue},
+                        pal_we,tilesys_cs,objsys_cs,k053252_cs} ),
+    .video_ever     ( dbg_video_ever    ),
+    .palette_writes ( dbg_palette_writes),
+    .sound_now      ( {snd_cs,snd_ok,snd_irq,|pcm_bsy,|pcm_sample,
+                        |{snd_l,snd_r},rmrd,dbg_eep_rdy} ),
+    .sound_ever     ( dbg_sound_ever    ),
+    .sound_events   ( dbg_sound_events  ),
+    .audio_nonzero  ( dbg_audio_nonzero ),
+    .snd_irq        ( snd_irq           ),
+    .snd_ok         ( snd_ok            ),
+    .snd_cs         ( snd_cs            ),
+    .pcm_bsy        ( pcm_bsy           ),
+    .pcm_sample     ( pcm_sample        ),
+    .pcm_warm       ( pcm_prefetch_warm ),
+    .pcm_underrun   ( pcm_prefetch_underrun ),
+    .pcm_fill_cs    ( pcm_fill_cs       ),
+    .pcm_reverse    ( pcm_reverse       ),
+    .snd_l          ( snd_l             ),
+    .snd_r          ( snd_r             ),
+    .pcm_addr_a     ( pcm_raw_addr_a    ),
+    .pcm_addr_b     ( pcm_raw_addr_b    ),
+    .pcm_addr_c     ( pcm_raw_addr_c    ),
+    .pcm_addr_d     ( pcm_raw_addr_d    ),
+    .pcm_fill_addr_a( pcm_fill_addr_a   ),
+    .pcm_fill_addr_b( pcm_fill_addr_b   ),
+    .pcm_fill_addr_c( pcm_fill_addr_c   ),
+    .pcm_fill_addr_d( pcm_fill_addr_d   ),
+    .lyrf_cs        ( lyrf_cs           ),
+    .lyra_cs        ( lyra_cs           ),
+    .lyrb_cs        ( lyrb_cs           ),
+    .lyro_cs        ( lyro_cs           ),
+    .lyra_ok        ( lyra_ok           ),
+    .lyro_ok        ( lyro_ok           ),
+    .objcha_n       ( objcha_n          ),
+    .esckids        ( esckids           ),
+    .cabinet_2p     ( cabinet_2p        ),
+    .init           ( init              ),
+    .rst8           ( rst8              ),
+    .rst24          ( rst24             ),
+    .rst48          ( rst48             ),
+    .rst96          ( rst96             ),
+    .irq_n          ( cpu_irqn          ),
+    .firq_n         ( cpu_firqn         ),
+    .nmi_n          ( cpu_nmin          ),
+    .hist_index     ( dbg_hist_index    ),
+    .reg_index      ( dbg_reg_index     ),
+    .red            ( red               ),
+    .green          ( green             ),
+    .blue           ( blue              )
+);
 
 // Escape Kids maps the three OSD action buttons to Run, Super Jump and
 // Auto Run.  Keep the convenience behavior in a project-owned wrapper so
@@ -360,7 +438,7 @@ jtsimson_main u_main(
     .rom_addr       ( main_rom_addr ),
     .rom_data       ( main_data     ),
     .rom_cs         ( main_cs       ),
-    .rom_ok         ( main_ok       ),
+    .rom_ok         ( main_cpu_ok   ),
     // RAM
     .ram_addr       ( ram_addr      ),
     .ram_we         ( ram_we        ),
@@ -378,6 +456,8 @@ jtsimson_main u_main(
     .rst8           ( rst8          ),
     .LVBL           ( LVBL          ),
     .irq_n          ( cpu_irqn      ),
+    .cpu_firqn      ( cpu_firqn     ),
+    .cpu_nmin       ( cpu_nmin      ),
     .dma_bsy        ( dma_bsy       ),
 
     .tilesys_dout   ( tilesys_dout  ),
@@ -414,12 +494,31 @@ jtsimson_main u_main(
     // Debug
     .debug_bus      ( debug_bus     ),
     .st_dout        ( st_main       ),
-    // TEMPORARY diagnostic taps - see jtsimson_main.v port list
-    .dbg_berr_l     ( dbg_berr_l    ),
-    .dbg_dtack      ( dbg_dtack     ),
-    .dbg_eep_rdy    ( dbg_eep_rdy   ),
+    .dbg_hist_sel   ( dbg_hist_index ),
+    .dbg_reg_sel    ( dbg_reg_index ),
+    .dbg_pc         ( dbg_pc        ),
     .dbg_pcbad      ( dbg_pcbad     ),
-    .dbg_aupper     ( dbg_aupper    )
+    .dbg_trap_pc    ( dbg_trap_pc   ),
+    .dbg_trap_addr  ( dbg_trap_addr ),
+    .dbg_hist_pc    ( dbg_hist_pc   ),
+    .dbg_hist_addr  ( dbg_hist_addr ),
+    .dbg_accept_count( dbg_accept_count ),
+    .dbg_hist_wr    ( dbg_hist_wr    ),
+    .dbg_cpu_din    ( dbg_cpu_din    ),
+    .dbg_aupper     ( dbg_aupper      ),
+    .dbg_last_op    ( dbg_last_op   ),
+    .dbg_trap_op    ( dbg_trap_op   ),
+    .dbg_trap_data  ( dbg_trap_data ),
+    .dbg_trap_flags ( dbg_trap_flags),
+    .dbg_hist_op    ( dbg_hist_op   ),
+    .dbg_hist_data  ( dbg_hist_data ),
+    .dbg_hist_flags ( dbg_hist_flags),
+    .dbg_cpu_reg_byte( dbg_cpu_reg_byte ),
+    .dbg_trap_seen  ( dbg_trap_seen ),
+    .dbg_berr_l     ( dbg_berr_l    ),
+    .dbg_buserror   ( dbg_buserror  ),
+    .dbg_dtack      ( dbg_dtack     ),
+    .dbg_eep_rdy    ( dbg_eep_rdy  )
 );
 
 /* verilator tracing_off */
@@ -550,9 +649,9 @@ jtsimson_video #(
     .lyra_ok        ( lyra_ok       ),
     .lyro_ok        ( lyro_ok       ),
     // pixels
-    .red            ( red           ),
-    .green          ( green         ),
-    .blue           ( blue          ),
+    .red            ( core_red      ),
+    .green          ( core_green    ),
+    .blue           ( core_blue     ),
     // Debug
     .debug_bus      ( debug_bus     ),
     .ioctl_addr     ( video_dumpa   ),

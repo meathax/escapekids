@@ -98,20 +98,31 @@ module jtsimson_main(
     // Debug
     input       [ 7:0]  debug_bus,
     output reg  [ 7:0]  st_dout,
-
-    // TEMPORARY hardware bring-up diagnostic taps (Escape Kids boot
-    // black-screen). Additive, read-only exports of signals that already
-    // exist inside this module; no functional behaviour changed. Remove
-    // this whole port group (and its two connection points below) before a
-    // release build - search for "dbg_" in this file.
-    output               dbg_berr_l,   // sticky: CPU permanently halted by a
-                                        // latched bus-error (illegal opcode
-                                        // trap from the jtkcpu ucode)
-    output               dbg_dtack,    // live: (~rom_cs|rom_ok)&tilesys_rom_dtack
-    output               dbg_eep_rdy,  // live: EEPROM ready line
-    output      [15:0]   dbg_pcbad,    // sticky: PC latched at the trap
-    output      [ 7:0]   dbg_aupper    // live: jtkcpu's own bank/page
-                                        // register (addr[23:16] from the CPU)
+    input       [ 3:0]  dbg_hist_sel,
+    input       [ 3:0]  dbg_reg_sel,
+    output      [15:0]  dbg_pc,
+    output      [15:0]  dbg_pcbad,
+    output      [15:0]  dbg_trap_pc,
+    output      [15:0]  dbg_trap_addr,
+    output      [15:0]  dbg_hist_pc,
+    output      [15:0]  dbg_hist_addr,
+    output      [15:0]  dbg_accept_count,
+    output      [ 3:0]  dbg_hist_wr,
+    output      [ 7:0]  dbg_cpu_din,
+    output      [ 7:0]  dbg_aupper,
+    output      [ 7:0]  dbg_last_op,
+    output      [ 7:0]  dbg_trap_op,
+    output      [ 7:0]  dbg_trap_data,
+    output      [ 7:0]  dbg_trap_flags,
+    output      [ 7:0]  dbg_hist_op,
+    output      [ 7:0]  dbg_hist_data,
+    output      [ 7:0]  dbg_hist_flags,
+    output reg  [ 7:0]  dbg_cpu_reg_byte,
+    output              dbg_trap_seen,
+    output              dbg_berr_l,
+    output              dbg_buserror,
+    output              dbg_dtack,
+    output              dbg_eep_rdy
 );
 `ifndef NOMAIN
 
@@ -132,12 +143,118 @@ wire        eep_rdy, eep_do, irq_mx, firqn_ff, irqn_ff, cab_rd, firqn;
 reg         eep_di, eep_clk, eep_cs, irqen, firqen, WOC1, WOC0,
             bankr;
 
+wire [15:0] cpu_x, cpu_y, cpu_u, cpu_s, cpu_pc;
+wire [ 7:0] cpu_a, cpu_b, cpu_cc, cpu_dp;
+wire        cpu_is_op;
+reg  [ 7:0] last_opcode;
+reg         trap_seen;
+reg  [15:0] trap_pc, trap_addr;
+reg  [ 7:0] trap_op, trap_data, trap_flags;
+reg  [15:0] accepted_count;
+reg  [ 3:0] hist_wr;
+reg  [15:0] hist_pc   [0:15];
+reg  [15:0] hist_addr [0:15];
+reg  [ 7:0] hist_op   [0:15];
+reg  [ 7:0] hist_data [0:15];
+reg  [ 7:0] hist_flags[0:15];
+
+wire accepted_cycle = cpu_cen & dtack & |{
+    rom_cs, pal_cs, ram_cs, io_cs, eeprom_cs, objsys_cs, objreg_cs,
+    pcu_cs, joystk_cs, basel_cs, out_cs, snd_cs, stsw_cs,
+    tilesys_cs, k053252_cs, objread_cs, cr_cs
+};
+
+assign dbg_pc           = cpu_pc;
+assign dbg_pcbad        = pcbad;
+assign dbg_trap_pc      = trap_pc;
+assign dbg_trap_addr    = trap_addr;
+assign dbg_hist_pc      = hist_pc[dbg_hist_sel];
+assign dbg_hist_addr    = hist_addr[dbg_hist_sel];
+assign dbg_accept_count = accepted_count;
+assign dbg_hist_wr      = hist_wr;
+assign dbg_cpu_din      = cpu_din;
+assign dbg_aupper       = Aupper;
+assign dbg_last_op      = last_opcode;
+assign dbg_trap_op      = trap_op;
+assign dbg_trap_data    = trap_data;
+assign dbg_trap_flags   = trap_flags;
+assign dbg_hist_op      = hist_op[dbg_hist_sel];
+assign dbg_hist_data    = hist_data[dbg_hist_sel];
+assign dbg_hist_flags   = hist_flags[dbg_hist_sel];
+assign dbg_trap_seen    = trap_seen;
+assign dbg_berr_l       = berr_l;
+assign dbg_buserror     = buserror;
+assign dbg_dtack        = dtack;
+assign dbg_eep_rdy      = eep_rdy;
+
+always @(*) begin
+    case (dbg_reg_sel)
+        4'h0: dbg_cpu_reg_byte = cpu_a;
+        4'h1: dbg_cpu_reg_byte = cpu_b;
+        4'h2: dbg_cpu_reg_byte = cpu_cc;
+        4'h3: dbg_cpu_reg_byte = cpu_dp;
+        4'h4: dbg_cpu_reg_byte = cpu_x[15:8];
+        4'h5: dbg_cpu_reg_byte = cpu_x[7:0];
+        4'h6: dbg_cpu_reg_byte = cpu_y[15:8];
+        4'h7: dbg_cpu_reg_byte = cpu_y[7:0];
+        4'h8: dbg_cpu_reg_byte = cpu_u[15:8];
+        4'h9: dbg_cpu_reg_byte = cpu_u[7:0];
+        4'ha: dbg_cpu_reg_byte = cpu_s[15:8];
+        4'hb: dbg_cpu_reg_byte = cpu_s[7:0];
+        4'hc: dbg_cpu_reg_byte = cpu_pc[15:8];
+        4'hd: dbg_cpu_reg_byte = cpu_pc[7:0];
+        4'he: dbg_cpu_reg_byte = last_opcode;
+        default: dbg_cpu_reg_byte = {trap_seen, berr_l, buserror, cpu_is_op,
+                                     rom_cs, rom_ok, dtack, cpu_cen};
+    endcase
+end
+
+integer dbg_i;
+always @(posedge clk) begin
+    if (rst) begin
+        last_opcode  <= 8'd0;
+        trap_seen    <= 1'b0;
+        trap_pc      <= 16'd0;
+        trap_addr    <= 16'd0;
+        trap_op      <= 8'd0;
+        trap_data    <= 8'd0;
+        trap_flags   <= 8'd0;
+        accepted_count <= 16'd0;
+        hist_wr      <= 4'd0;
+        for (dbg_i=0; dbg_i<16; dbg_i=dbg_i+1) begin
+            hist_pc[dbg_i]    <= 16'd0;
+            hist_addr[dbg_i]  <= 16'd0;
+            hist_op[dbg_i]    <= 8'd0;
+            hist_data[dbg_i]  <= 8'd0;
+            hist_flags[dbg_i] <= 8'd0;
+        end
+    end else begin
+        if (accepted_cycle && cpu_is_op && !cpu_we)
+            last_opcode <= cpu_din;
+        if (accepted_cycle)
+            accepted_count <= accepted_count + 16'd1;
+        if (!trap_seen && accepted_cycle) begin
+            hist_pc[hist_wr]    <= cpu_pc;
+            hist_addr[hist_wr]  <= A;
+            hist_op[hist_wr]    <= cpu_is_op && !cpu_we ? cpu_din : last_opcode;
+            hist_data[hist_wr]  <= cpu_we ? cpu_dout : cpu_din;
+            hist_flags[hist_wr] <= {1'b1, cpu_we, cpu_is_op, rom_cs,
+                                    rom_ok, dtack, cpu_cen, buserror};
+            hist_wr             <= hist_wr + 4'd1;
+        end
+        if (buserror && !trap_seen) begin
+            trap_seen  <= 1'b1;
+            trap_pc    <= cpu_pc;
+            trap_addr  <= A;
+            trap_op    <= last_opcode;
+            trap_data  <= cpu_din;
+            trap_flags <= {cpu_is_op, rom_cs, rom_ok, dtack,
+                           cpu_cen, cpu_we, irq_mx, firqn};
+        end
+    end
+end
+
 assign dtack   = (~rom_cs | rom_ok) & tilesys_rom_dtack;
-assign dbg_berr_l  = berr_l;   // TEMPORARY diagnostic taps - see port list above
-assign dbg_dtack   = dtack;
-assign dbg_eep_rdy = eep_rdy;
-assign dbg_pcbad   = pcbad;
-assign dbg_aupper  = Aupper;
 assign ram_we  = ram_cs & cpu_we;
 assign snd_wrn = suratk ? ~cpu_we : ~(snd_cs & cpu_we);
 assign pal_we  = pal_cs & cpu_we;
@@ -597,6 +714,18 @@ jtkcpu u_cpu(
     .dout   ( cpu_dout  ),
     .addr   ({Aupper, A}),
     .we     ( cpu_we    )
+`ifdef JTKCPU_DEBUG
+   ,.x      ( cpu_x      ),
+    .y      ( cpu_y      ),
+    .u      ( cpu_u      ),
+    .s      ( cpu_s      ),
+    .pc     ( cpu_pc     ),
+    .a      ( cpu_a      ),
+    .b      ( cpu_b      ),
+    .cc     ( cpu_cc     ),
+    .dp     ( cpu_dp     ),
+    .is_op  ( cpu_is_op  )
+`endif
 );
 /* verilator tracing_on */
 `else

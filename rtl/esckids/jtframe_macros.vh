@@ -39,6 +39,7 @@
 `define JTFRAME_MR_FASTIO 0
 `define JTFRAME_DEBUG_VPOS 4
 `define JTFRAME_DIALEMU_LEFT 5
+`define JTKCPU_DEBUG
 `define GAME_ROM_LEN 26'h6E0000
 
 `endif
