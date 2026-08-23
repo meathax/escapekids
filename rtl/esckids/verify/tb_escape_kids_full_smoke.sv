@@ -128,7 +128,6 @@ module tb_escape_kids_full_smoke;
     // lvbl_falls/samples plus the delta since the previous snapshot, so a
     // stalled video/audio pipeline shows up as a run of zero deltas instead
     // of only being inferred from the final totals.
-    integer diag_cycle_count;
     integer snapshot_interval;
     integer last_snapshot_lvbl_rises;
     integer last_snapshot_lvbl_falls;
