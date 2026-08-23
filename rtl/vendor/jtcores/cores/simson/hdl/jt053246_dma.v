@@ -41,6 +41,8 @@ module jt053246_dma(
     output            dma_weh,
     output            dma_wel,
     output     [11:1] dma_wr_addr,
+    output            dma_wr_bank,
+    output            scan_bank,
     output     [15:0] dma_din,
     output reg        flicker
 );
@@ -49,6 +51,7 @@ parameter K55673=0, K55673_DESC_SORT=0, EDGE_TRIGGER=0;
 
 wire        dma_we, hs_pos, clear_last;
 reg  [ 1:0] lvbl_sh;
+reg         gx_active_bank, gx_write_bank, gx_commit_pending;
 reg  [11:1] dma_bufa;
 reg  [15:0] dma_bufd;
 wire [ 7:0] sort_24x, sort_673;
@@ -100,7 +103,10 @@ assign dma_weh = dma_we &  dma_wr_addr[1];
 assign dma_din     = lut256 ? gx_wdata : (dma_clr ? 16'h0 : dma_bufd);
 assign dma_we      = lut256 ? gx_we : (dma_clr | dma_ok);
 assign dma_wr_addr = lut256 ? gx_waddr : (dma_clr ? dma_addr[11:1] : dma_bufa);
+assign dma_wr_bank = lut256 ? gx_write_bank : 1'b0;
+assign scan_bank   = lut256 ? gx_active_bank : 1'b0;
 assign hs_pos  = hs & ~hsl;
+wire frame_start = hs_pos && lvbl && !lvbl_sh[0];
 assign clear_last = k44_en ? (lut256 ? &dma_addr[11:1] : &dma_addr[10:1]) :
                              &dma_addr[11:1];
 
@@ -179,11 +185,19 @@ always @(posedge clk) begin
         gx_header  <= 0;
         zslot_addr <= 0;
         gx_enabled <= 0;
+        lvbl_sh    <= 0;
+        gx_active_bank    <= 0;
+        gx_write_bank     <= 1;
+        gx_commit_pending <= 0;
     end else if( pxl2_cen ) begin
         hsl <= hs;
         if( hs_pos ) begin
             lvbl_sh    <= lvbl_sh<<1;
             lvbl_sh[0] <= lvbl;
+        end
+        if( frame_start && gx_commit_pending ) begin
+            gx_active_bank    <= gx_write_bank;
+            gx_commit_pending <= 0;
         end
         if(!dma_bsy && (trigger || dma_44) ) begin
             dma_bsy  <= 1;
@@ -192,6 +206,7 @@ always @(posedge clk) begin
             flicker  <= ~flicker;
             dma_addr <= 0;
             if( lut256 ) begin
+                gx_write_bank <= ~gx_active_bank;
                 gx_state   <= GX_CLEAR;
                 gx_src     <= 0;
                 gx_running <= 0;
@@ -268,6 +283,7 @@ always @(posedge clk) begin
                         gx_state <= GX_COPY_WORD_WAIT;
                     end else if( &gx_src ) begin
                         dma_bsy  <= 0;
+                        gx_commit_pending <= 1;
                         gx_state <= GX_IDLE;
                     end else begin
                         gx_src   <= gx_src + 1'd1;
@@ -279,6 +295,7 @@ always @(posedge clk) begin
                     if( gx_word==3'd6 ) begin
                         if( &gx_src ) begin
                             dma_bsy  <= 0;
+                            gx_commit_pending <= 1;
                             gx_state <= GX_IDLE;
                         end else begin
                             gx_src   <= gx_src + 1'd1;

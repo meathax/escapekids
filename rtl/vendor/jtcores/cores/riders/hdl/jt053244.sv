@@ -41,6 +41,7 @@ module jt053244(    // sprite logic
     output     [15:0] code,
     // There are 22 bits communicating both chips on the PCB
     output     [ 9:0] attr,     // OC pins / GX975 color word
+    output     [ 7:0] zcode,
     output            hflip,
     output            vflip,
     output     [ 9:0] hpos,
@@ -80,13 +81,17 @@ localparam [2:0] REG_XOFF  = 0, // X offset
 
 
 wire [15:0] scan_even, scan_odd, dma_din;
+wire [ 7:0] scan_zcode;
 wire [11:2] scan_addr;
 wire [11:1] dma_wr_addr;
+wire        dma_wr_bank, scan_bank;
 wire [ 9:0] xoffset, yoffset;
 wire [ 7:0] cfg;
 wire        dma_wel, dma_weh, dma_trig, vb_rd, nc,
             cpu_bsy, ghf, gvf, mode8, dma_en, flicker;
 wire        gx975_en;
+
+assign zcode = scan_zcode;
 
 
 assign ghf       = cfg[0]; // global flip
@@ -103,6 +108,7 @@ jt053244_scan #(.HFLIP_OFFSET(HFLIP_OFFSET), .GX975(GX975)
     .clk       ( clk        ),
     .code      ( code       ),
     .attr      ( attr       ),
+    .zcode     ( scan_zcode ),
     .hflip     ( hflip      ),
     .vflip     ( vflip      ),
     .hpos      ( hpos       ),
@@ -154,6 +160,8 @@ jt053246_dma u_dma(
     .dma_weh    ( dma_weh   ),
     .dma_wel    ( dma_wel   ),
     .dma_wr_addr(dma_wr_addr),
+    .dma_wr_bank( dma_wr_bank),
+    .scan_bank  ( scan_bank  ),
     .dma_din    ( dma_din   ),
 
     .flicker    ( flicker   )  // debug
@@ -176,32 +184,32 @@ jt053246_mmr u_mmr(
     .st_dout    ( st_dout   )
 );
 
-jtframe_dual_ram16 #(.AW(10)) u_even( // 10:0 -> 2kB
+jtframe_dual_ram16 #(.AW(10+GX975)) u_even( // one bank for donors, two for GX975
     // Port 0: DMA
     .clk0   ( clk            ),
     .data0  ( dma_din        ),
-    .addr0  (dma_wr_addr[11:2]),
+    .addr0  ( GX975 ? {dma_wr_bank,dma_wr_addr[11:2]} : dma_wr_addr[11:2] ),
     .we0    ( {2{dma_wel}}   ),
     .q0     (                ),
     // Port 1: scan
     .clk1   ( clk            ),
     .data1  ( 16'd0          ),
-    .addr1  ( scan_addr      ),
+    .addr1  ( GX975 ? {scan_bank,scan_addr} : scan_addr ),
     .we1    ( 2'b0           ),
     .q1     ( scan_even      )
 );
 
-jtframe_dual_ram16 #(.AW(10)) u_odd( // 10:0 -> 2kB
+jtframe_dual_ram16 #(.AW(10+GX975)) u_odd( // one bank for donors, two for GX975
     // Port 0: DMA
     .clk0   ( clk            ),
     .data0  ( dma_din        ),
-    .addr0  (dma_wr_addr[11:2]),
+    .addr0  ( GX975 ? {dma_wr_bank,dma_wr_addr[11:2]} : dma_wr_addr[11:2] ),
     .we0    ( {2{dma_weh}}   ),
     .q0     (                ),
     // Port 1: scan
     .clk1   ( clk            ),
     .data1  ( 16'd0          ),
-    .addr1  ( scan_addr      ),
+    .addr1  ( GX975 ? {scan_bank,scan_addr} : scan_addr ),
     .we1    ( 2'b0           ),
     .q1     ( scan_odd       )
 );

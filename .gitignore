@@ -47,6 +47,11 @@ roms/**/*.nv
 
 # Local MAME runtime state/captures.
 cfg/
+!/cfg/
+/cfg/*
+!/cfg/macros.def
+!/cfg/mem.yaml
+!/cfg/mame2mra.toml
 nvram/
 snap/
 sta/

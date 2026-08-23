@@ -11,9 +11,11 @@ always #5 clk = ~clk;
 
 wire [11:2] gx_addr, donor_addr;
 wire gx_start, donor_start;
+wire [7:0] gx_zcode, donor_zcode;
 
 jt053244_scan #(.GX975(1)) u_gx975 (
     .rst(rst), .clk(clk), .code(), .attr(), .hflip(), .vflip(),
+    .zcode(gx_zcode),
     .hpos(), .ysub(), .hzoom(), .hz_keep(), .hdump(9'd0),
     .vdump(vdump), .hs(hs), .scan_even(16'd0), .scan_odd(16'd0),
     .xoffset(10'd0), .yoffset(10'd0), .ghf(1'b0), .gvf(1'b0),
@@ -23,6 +25,7 @@ jt053244_scan #(.GX975(1)) u_gx975 (
 
 jt053244_scan #(.GX975(1)) u_donor (
     .rst(rst), .clk(clk), .code(), .attr(), .hflip(), .vflip(),
+    .zcode(donor_zcode),
     .hpos(), .ysub(), .hzoom(), .hz_keep(), .hdump(9'd0),
     .vdump(vdump), .hs(hs), .scan_even(16'd0), .scan_odd(16'd0),
     .xoffset(10'd0), .yoffset(10'd0), .ghf(1'b0), .gvf(1'b0),

@@ -1,13 +1,5 @@
-// Escape Kids input convenience wrapper.
-//
-// The original input bus is active low.  Button 1 is the game's Run control
-// (bit 4), Button 2 is Super Jump (bit 5), and the project-added Button 3 is
-// Auto Run (bit 6).  While Auto Run is held, alternate visible frames expose
-// Button 1 as pressed.  A physical Run press always remains pressed.
-//
-// This is deliberately Escape-only and sits outside the shared JTFRAME input
-// machinery.  It adds no clock or CDC boundary: LVBL is produced in the same
-// game clock domain and is sampled only as a synchronous falling-edge event.
+// Escape-only Auto Run wrapper. Inputs are active low: Run=4, Super Jump=5,
+// Auto Run=6. LVBL and clk share the game clock domain.
 module escape_kids_auto_run(
     input  wire       clk,
     input  wire       rst,
@@ -45,8 +37,7 @@ function [6:0] apply_auto_run;
     input       phase_i;
     begin
         apply_auto_run = joy;
-        // Button 3 is active low.  On the active phase, synthesize a
-        // Button-1 press; on the inactive phase, release it for a new tap.
+        // Auto Run alternates a synthesized Run press on visible-frame phases.
         if (enable_i && !joy[6] && phase_i)
             apply_auto_run[4] = 1'b0;
     end

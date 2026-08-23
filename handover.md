@@ -1,5 +1,35 @@
 # Escape Kids — ROM-ready black-screen repair handover
 
+## 23 August sprite pipeline correction
+
+Observation: GX975 DMA rewrote the live 053247 object RAM while the scanner
+could still read it, and the line buffer retained pixels without the sprite
+Z/priority that produced them. The result was mixed-frame sprite state and
+scene-dependent sprite/shadow occlusion.
+
+Evidence: [MAME's 053247 implementation](https://github.com/mamedev/mame/blob/master/src/mame/konami/k053246_k053247_k055673.cpp)
+uses word 0[7:0] as the zcode and sorts before drawing; word 6[11:10] carries
+shadow state. The local DMA/zcode and line-buffer tests reproduce the relevant
+hardware contracts.
+
+Hypotheses: the visible frame defect could come from DMA/scan overlap, from
+pixel arbitration, or both. The focused tests falsified neither independently;
+both paths are required for the observed symptoms.
+
+Selected explanation: use an inactive 256-entry DMA bank and commit it only at
+the next frame boundary; carry zcode and priority into the line buffer and
+arbitrate opaque and shadow writes there.
+
+Verification: `tb_esckids_obj_dma_frame_bank` passes two bank commits with a
+stable scan bank; `tb_esckids_obj_zbuffer` passes opaque and shadow priority
+cases; original DMA zcode, full CPU/sound smoke and authenticated native-frame
+capture pass. Captured frames 0, 30, 60 and 90 are in
+`.mister/frames-post-z/` (diagnostic artifacts, not tracked goldens).
+
+Known unknowns: no Quartus fit/timing report or real-MiSTer hardware run has
+yet measured the added GX975 sidecar RAMs. The next evidence threshold is a
+fresh compressed RBF plus hardware overlap and DMA-boundary checks.
+
 ## 22 August hardware screenshot correction
 
 The complete 32-page hardware-debug capture supersedes the earlier
@@ -96,3 +126,23 @@ Changes are uncommitted. The pre-existing dirty worktree and unrelated user
 edits were preserved. The existing remote-history divergence remains
 unresolved; do not rebase, merge, force-push, or otherwise resolve it without
 the user's explicit direction.
+
+## Current build update — 2026-08-23
+
+The JTFRAME contract surface is now project-visible in `cfg/macros.def`,
+`cfg/mem.yaml`, and `cfg/mame2mra.toml`, with
+`tools/validate_jtframe_config.py` enforcing the macro, memory, ROM-order,
+header, and MRA conventions.
+
+A clean Quartus Prime 17.0.2 Build 602 full compile passed with 0 errors.
+Worst-case multicorner margins are setup +0.231 ns, hold +0.105 ns,
+recovery +3.310 ns, removal +0.280 ns, and minimum pulse width +1.041 ns;
+all TNS is zero. The compressed candidate RBF is staged as
+`releases/Arcade-EscapeKids_20260823.rbf` with SHA-256
+`12A9256353F1C7FEA6DD4FF47C72C0320BA2DCA0F720B0493D338463467733BC`.
+
+This is still hardware-pending: no real MiSTer load/display/audio/input
+verification was run, and full gameplay/video/audio equivalence remains open.
+The dated RBF is a staged candidate, not a hardware-accepted release. The
+vendor-closure audit remains blocked by the pre-existing dirty RTL/vendor
+worktree and stale provenance ledger; those changes were preserved.

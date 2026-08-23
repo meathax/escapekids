@@ -1,22 +1,12 @@
-// Escape Kids project wrapper around the pinned JTFRAME MiSTer target.
-//
-// The vendored JTFRAME target uses the current 49-bit bridge (framebuffer and
-// scanline capability bits precede the Template bridge).  Template_MiSTer
-// commit 0874acdf exposes the stable 46-bit bridge.  Keep that framework
-// boundary intact and adapt only the three target capability bits here.
+// Escape wrapper for the pinned JTFRAME target. The target bridge is 49 bits;
+// Template_MiSTer exposes the stable 46-bit HPS portion.
 
 `ifndef ESCAPE_KIDS_JTFRAME_EMU_INCLUDED
 `define ESCAPE_KIDS_JTFRAME_EMU_INCLUDED
 
-// JTFRAME's target helper names are project-private in the vendored closure.
-// Template_MiSTer also provides an hps_io module, but its bridge is 46 bits;
-// Escape Kids uses the audited JTFRAME 49-bit target helper.
 `include "vendor/jtcores/modules/jtframe/target/mister/hdl/sys/hps_io.sv"
 `include "vendor/jtcores/modules/jtframe/target/mister/hdl/jtframe_emu.sv"
 
-// Quartus owns the real clock implementation.  The Verilator branch is a
-// deterministic, synthesizable fallback used by the headless acceptance
-// harness; it preserves the JTFRAME clock-enable relationships.
 module jtframe_core_pll(
     input  wire refclk,
     input  wire rst,
@@ -42,8 +32,7 @@ module jtframe_core_pll(
     assign outclk_5 = refclk;
     assign locked   = ~rst;
 `else
-    // Cyclone-V primitive.  The generated QSF/Quartus flow binds this to the
-    // device PLL; no Template sys/PLL file is modified by this wrapper.
+    // Quartus binds this primitive to the device PLL; sys/PLL remains vendored.
     altera_pll #(
         .reference_clock_frequency("50.0 MHz"),
         .operation_mode("direct"),
@@ -71,13 +60,10 @@ endmodule
 
 module emu(`include "sys/emu_ports.vh");
 
-    // Preserve bidirectional HPS data/status bits.  JTFRAME's leading
-    // framebuffer/scanline capability bits are reserved for this v1 core.
+    // JTFRAME reserves the leading framebuffer/scanline capability bits.
     tri [48:0] jt_hps_bus;
 `ifdef VERILATOR
-    // The headless simulator does not implement the Verilog tran primitive.  These two
-    // tri-state assignments preserve both directions of the bridge in the
-    // headless model; the Quartus branch below retains the real primitive.
+    // The headless simulator has no tran primitive; preserve both directions.
     /* verilator lint_off UNOPTFLAT */
     assign jt_hps_bus[45:0] = HPS_BUS;
     assign HPS_BUS = jt_hps_bus[45:0];

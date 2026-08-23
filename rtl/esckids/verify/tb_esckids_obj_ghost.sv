@@ -26,6 +26,7 @@ reg  [8:0] vdump=9'h0F8, hdump=9'h020;
 // ---- scan <-> LUT model -------------------------------------------------
 wire [15:0] code;
 wire [ 9:0] attr;
+wire [ 7:0] zcode;
 wire        hflip, vflip, hz_keep, dr_start;
 wire [ 1:0] shd;
 wire [ 9:0] hpos;
@@ -44,6 +45,7 @@ jt053244_scan #(.GX975(1),.HFLIP_OFFSET(10'd134),.SCREEN_WIDTH(384)) u_scan(
     .clk        ( clk       ),
     .code       ( code      ),
     .attr       ( attr      ),
+    .zcode      ( zcode     ),
     .hflip      ( hflip     ),
     .vflip      ( vflip     ),
     .hpos       ( hpos      ),
@@ -149,6 +151,9 @@ jtframe_objdraw #(
     .hflip      ( ~hflip        ),
     .vflip      ( vflip         ),
     .pal        ({shd,attr}),
+    .obj_z      ( 8'd0 ),
+    .obj_prio    ( 5'd0 ),
+    .z_enable    ( 1'b0 ),
     .rom_addr   ( pre_addr      ),
     .rom_cs     ( pre_cs        ),
     .rom_ok     ( 1'b1          ),

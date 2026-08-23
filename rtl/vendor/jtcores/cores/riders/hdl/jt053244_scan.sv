@@ -24,6 +24,7 @@
     output reg [15:0] code,
     // There are 22 bits communicating both chips on the PCB
     output reg [ 9:0] attr,     // OC pins / GX975 color word
+    output reg [ 7:0] zcode,
     output            hflip,
     output reg        vflip,
     output reg [ 9:0] hpos,
@@ -211,6 +212,7 @@ always @(posedge clk, posedge rst) begin
         hstep    <= 0;
         code     <= 0;
         attr     <= 0;
+        zcode    <= 0;
         pre_vf   <= 0;
         pre_hf   <= 0;
         vflip    <= 0;
@@ -237,6 +239,7 @@ always @(posedge clk, posedge rst) begin
                     { sq, pre_vf, pre_hf, size } <= scan_even[14:8];
                     code    <= {1'b0, scan_odd[14:0]}; // bit 14 needed for tmnt2
                     pri <= scan_even[6:0];
+                    zcode <= gx975_path ? scan_even[7:0] : 8'd0;
                     hstep   <= 0;
                     hz_keep <= 0;
                     // if( !scan_even[15]  || scan_obj[6:0]!=2  ) begin

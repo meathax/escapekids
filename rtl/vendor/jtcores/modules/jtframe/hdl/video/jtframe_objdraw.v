@@ -38,7 +38,10 @@ module jtframe_objdraw #( parameter
     SHADOW    = 0,
     SHADOW_PEN  = ALPHA,
     SW        = 1,
-    PACKED    = 0
+    PACKED    = 0,
+    ZMODE     = 0,
+    ZBUF_W    = 8,
+    PRIOW     = 5
 )(
     input               rst,
     input               clk,
@@ -59,6 +62,9 @@ module jtframe_objdraw #( parameter
     input               hflip,
     input               vflip,
     input      [PW-5:0] pal,
+    input      [ZBUF_W-1:0] obj_z,
+    input      [PRIOW-1:0] obj_prio,
+    input               z_enable,
 
     output     [CW+6:2] rom_addr, // {code,H,Y}
     output              rom_cs,
@@ -87,7 +93,10 @@ module jtframe_objdraw #( parameter
         .KEEP_OLD       ( KEEP_OLD      ),
         .SHADOW_PEN     ( SHADOW_PEN    ),
         .ALPHA          ( ALPHA         ),
-        .PACKED         ( PACKED        )
+        .PACKED         ( PACKED        ),
+        .ZMODE          ( ZMODE         ),
+        .ZBUF_W         ( ZBUF_W        ),
+        .PRIOW          ( PRIOW         )
     )u_gate(
         .rst            ( rst           ),
         .clk            ( clk           ),
@@ -106,6 +115,9 @@ module jtframe_objdraw #( parameter
         .hflip          ( hflip         ),
         .vflip          ( vflip         ),
         .pal            ( pal           ),
+        .obj_z         ( obj_z         ),
+        .obj_prio      ( obj_prio      ),
+        .z_enable      ( z_enable      ),
         .rom_addr       ( rom_addr      ),
         .rom_cs         ( rom_cs        ),
         .rom_ok         ( rom_ok        ),

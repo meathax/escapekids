@@ -49,6 +49,9 @@ module jtframe_objdraw_gate #( parameter
     SHADOW     =0, // 1 for shadows
     SW         =1, // Shadow bits width (Use with SHADOW==1)
     SHADOW_PEN = ALPHA, // Value used by only-shadow sprites. Use independently from SHADOW
+    ZMODE      =0,
+    ZBUF_W     =8,
+    PRIOW      =5,
     // object line buffer
     PACKED     =0  // 0 if rom_data is { plane3, plane2, plane1, plane0 }, 8 bits each
                    // 1 if rom_data packs the 4 planes in nibbles
@@ -74,6 +77,9 @@ module jtframe_objdraw_gate #( parameter
     input               hflip,
     input               vflip,
     input      [PW-5:0] pal,
+    input      [ZBUF_W-1:0] obj_z,
+    input      [PRIOW-1:0] obj_prio,
+    input               z_enable,
 
     output     [CW+6:2] rom_addr, // {code,H,Y}
     output              rom_cs,
@@ -94,6 +100,9 @@ reg  [AW-1:0] dr_xpos;
 reg    [ 3:0] dr_ysub;
 reg           dr_hflip, dr_vflip, dr_draw;
 reg  [PW-5:0] dr_pal;
+reg  [ZBUF_W-1:0] dr_z;
+reg  [PRIOW-1:0] dr_prio;
+reg               dr_z_enable;
 
 reg  [ZW-1:0] dr_hzoom;
 reg           dr_hz_keep;
@@ -121,6 +130,9 @@ generate
                 dr_hflip   <= hflip;
                 dr_vflip   <= vflip;
                 dr_pal     <= pal;
+                dr_z       <= obj_z;
+                dr_prio    <= obj_prio;
+                dr_z_enable <= z_enable;
                 dr_hzoom   <= hzoom;
                 dr_hz_keep <= hz_keep;
             end
@@ -135,6 +147,9 @@ generate
             dr_hflip   = hflip;
             dr_vflip   = vflip;
             dr_pal     = pal;
+            dr_z       = obj_z;
+            dr_prio    = obj_prio;
+            dr_z_enable = z_enable;
             dr_hzoom   = hzoom;
             dr_hz_keep = hz_keep;
         end
@@ -238,7 +253,10 @@ jtframe_obj_buffer #(
     .SW         ( SW          ),
     .SHADOW     ( SHADOW      ),
     .SHADOW_PEN ( SHADOW_PEN  ),
-    .KEEP_OLD   ( KEEP_OLD    )
+    .KEEP_OLD   ( KEEP_OLD    ),
+    .ZMODE      ( ZMODE       ),
+    .ZW         ( ZBUF_W      ),
+    .PRIOW      ( PRIOW       )
 ) u_linebuf(
     .clk        ( clk       ),
     .flip       ( 1'b0      ),      // flip is solved before this instance
@@ -247,6 +265,9 @@ jtframe_obj_buffer #(
     .we         ( we_dly    ),
     .wr_data    ( buf_din   ),
     .wr_addr    ( adly      ),
+    .wr_z       ( dr_z      ),
+    .wr_prio    ( dr_prio   ),
+    .z_enable   ( dr_z_enable ),
     // Previous line reading
     .rd         ( pxl_cen   ),
     .rd_addr    ( hdf       ),

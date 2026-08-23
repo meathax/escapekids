@@ -211,6 +211,9 @@ jtframe_objdraw #(
     .hflip      ( ~hflip        ),
     .vflip      ( vflip         ),
     .pal        ({pre_shd, attr}),
+    .obj_z     ( 8'd0 ),
+    .obj_prio  ( 5'd0 ),
+    .z_enable  ( 1'b0 ),
 
     .rom_addr   ( pre_addr      ),
     .rom_cs     ( pre_cs        ),

@@ -15,7 +15,8 @@ jtframe_obj_buffer #(
 ) dut(
     .clk(clk),.LHBL(lhbl),.flip(1'b0),
     .wr_data(wr_data),.wr_addr(wr_addr),.we(we),
-    .rd_addr(rd_addr),.rd(rd),.rd_data(rd_data)
+    .rd_addr(rd_addr),.rd(rd),.rd_data(rd_data),
+    .wr_z(8'd0),.wr_prio(5'd0),.z_enable(1'b0)
 );
 
 task write_pixel;

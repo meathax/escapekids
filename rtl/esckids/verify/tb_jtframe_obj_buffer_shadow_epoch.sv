@@ -28,7 +28,8 @@ module tb_jtframe_obj_buffer_shadow_epoch;
     ) dut(
         .clk(clk),.LHBL(LHBL),.flip(flip),
         .wr_data(wr_data),.wr_addr(wr_addr),.we(we),
-        .rd_addr(rd_addr),.rd(rd),.rd_data(rd_data)
+        .rd_addr(rd_addr),.rd(rd),.rd_data(rd_data),
+        .wr_z(8'd0),.wr_prio(5'd0),.z_enable(1'b0)
     );
 
     task line_flip;

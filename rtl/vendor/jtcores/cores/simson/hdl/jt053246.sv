@@ -88,6 +88,7 @@ localparam [7:0] SCAN_START = K55673==1 ? 8'h40 : 8'h0;
 wire [15:0] scan_even, scan_odd, dma_din;
 wire [11:2] scan_addr;
 wire [11:1] dma_wr_addr;
+wire        dma_wr_bank_unused, scan_bank_unused;
 wire [ 9:0] xoffset, yoffset;
 wire [ 7:0] cfg;
 wire        dma_wel, dma_weh, cpu_bsy,
@@ -156,6 +157,8 @@ jt053246_dma #(
     .dma_weh    ( dma_weh   ),
     .dma_wel    ( dma_wel   ),
     .dma_wr_addr(dma_wr_addr),
+    .dma_wr_bank( dma_wr_bank_unused ),
+    .scan_bank  ( scan_bank_unused   ),
     .dma_din    ( dma_din   ),
 
     .flicker    ( flicker   )  // debug

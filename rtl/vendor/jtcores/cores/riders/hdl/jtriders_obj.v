@@ -89,6 +89,7 @@ wire [ 9:0] hpos;
 wire [ 3:0] ysub;
 wire [11:0] hzoom;
 wire        pen15;
+wire [ 7:0] obj_zcode;
 
 wire scr_hflip, scr_vflip;
 
@@ -209,6 +210,7 @@ jt053244 #(.HFLIP_OFFSET(HFLIP_OFFSET), .GX975(GX975)
     // ROM addressing 22 bits in total
     .code       ( code      ),
     .attr       ( attr      ),     // OC pins
+    .zcode      ( obj_zcode ),
     .hflip      ( hflip     ),
     .vflip      ( vflip     ),
     .hpos       ( hpos      ),
@@ -239,6 +241,7 @@ jt053244 #(.HFLIP_OFFSET(HFLIP_OFFSET), .GX975(GX975)
 
 jtframe_objdraw #(
     .SHADOW(SHADOW),.SHADOW_PEN(SHADOW_PEN),.SW(2),
+    .ZMODE(GX975),.ZBUF_W(8),.PRIOW(5),
     .AW(10),.CW(16),.PW(4+10+2),.LATCH(1),.SWAPH(1),
     .ZW(12),.ZI(6),.ZENLARGE(1),
     .FLIP_OFFSET(9'h12),.KEEP_OLD(0)
@@ -262,6 +265,9 @@ jtframe_objdraw #(
     .hflip      ( ~hflip        ),
     .vflip      ( vflip         ),
     .pal        ({pre_shd,attr}),
+    .obj_z     ( obj_zcode ),
+    .obj_prio  ( esckids ? attr[9:5] : 5'd0 ),
+    .z_enable  ( esckids ),
 
     .rom_addr   ( pre_addr      ),
     .rom_cs     ( pre_cs        ),

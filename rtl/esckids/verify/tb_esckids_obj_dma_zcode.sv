@@ -10,6 +10,7 @@ wire [15:0] dma_data;
 wire        dma_bsy;
 wire        dma_weh, dma_wel;
 wire [11:1] dma_wr_addr;
+wire        dma_wr_bank, scan_bank;
 wire [15:0] dma_din;
 wire        flicker;
 
@@ -95,6 +96,8 @@ jt053246_dma dut(
     .dma_weh    ( dma_weh     ),
     .dma_wel    ( dma_wel     ),
     .dma_wr_addr( dma_wr_addr ),
+    .dma_wr_bank( dma_wr_bank ),
+    .scan_bank  ( scan_bank   ),
     .dma_din    ( dma_din     ),
     .flicker    ( flicker     )
 );

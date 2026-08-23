@@ -9,6 +9,8 @@ MiSTer FPGA implementation of Konami's *Escape Kids* arcade hardware for the DE1
 - Player controls named **Run**, **Super Jump**, and **Auto Run**
 - **Auto Run** repeatedly taps Run while held, reducing repeated button presses
 - Start, Coin, Service and Test controls
+- Game-written high scores persist through the 128-byte ER5911 NVRAM image
+- ROM downloads use JTFRAME's DDR3 burst staging path before reset release
 
 ## PCB Accuracy
 
@@ -16,7 +18,7 @@ MiSTer FPGA implementation of Konami's *Escape Kids* arcade hardware for the DE1
 | --- | --- |
 | Konami CPU/device address map | Pinned Escape/Vendetta MAME driver and original program-ROM decode |
 | K053252 raster totals | Original boot register writes and independent K053252 RTL/MAME totals: 384 × 264 |
-| ER5911 serial EEPROM command framing | ER5911 device documentation and the pinned MAME `EEPROM_ER5911_8BIT` model |
+| ER5911 serial EEPROM command framing and persistence | ER5911 device documentation, the pinned MAME `EEPROM_ER5911_8BIT` model, and the 128-byte MiSTer NVRAM contract |
 
 Areas without qualifying board measurements are not claimed here. Native hardware display, audio, and control validation remains a separate release gate.
 
@@ -33,8 +35,8 @@ Areas without qualifying board measurements are not claimed here. Native hardwar
 | K052109/K051962 tile/video logic | JTCORES video implementation |
 | K053251/K053252 timing and priority | JTCORES devices, Escape register programming |
 | Z80, YM2151 and K053260 audio | JTCORES sound devices with Escape PCM prefetch wrapper |
-| ER5911 serial EEPROM | `jt5911` donor plus generated 128×8 NVRAM path |
-| MiSTer HPS, SDRAM, video and OSD | MiSTer template framework |
+| ER5911 serial EEPROM | `jt5911` donor plus generated 128×8 NVRAM path; MRA index 2 is persistent storage for game high scores |
+| MiSTer HPS, DDR3/SDRAM, video and OSD | MiSTer template framework; `JTFRAME_MR_DDRLOAD` stages ROM downloads in 1 KiB DDR3 bursts |
 
 ## Credits
 
