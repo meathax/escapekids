@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__video-analyzer__get_metadata"
+    ]
+  }
+}
