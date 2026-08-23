@@ -272,6 +272,11 @@ module tb_escape_kids_full_smoke;
     // Per-frame sprite-pipeline activity counters (diagnostic only).
     integer dma_obj_px, dma_dr_start, dma_inzone_hits, dma_rom_cs;
     reg dma_dr_start_prev, dma_rom_cs_prev;
+    integer dma_scan_eval, dma_scan_draw;
+    integer dma_detail_first, dma_detail_last;
+    reg dma_scan_active;
+    reg [7:0] dma_scan_obj_prev;
+    reg [8:0] dma_scan_v;
 
     task automatic dma_trace_dump_slots(input integer frame_no, input [63:0] tag);
         reg [7:0] slot_no;
@@ -308,13 +313,13 @@ module tb_escape_kids_full_smoke;
                 if (dma_trace_fd != 0)
                     $fwrite(dma_trace_fd,
                         "{\"schema\":\"esckids-dma-src-v1\",\"frame\":%0d,\"event\":\"%0s\",\"entry\":%0d,\"hdr\":%0d,\"enable\":%0d,\"sortkey\":%0d}\n",
-                        frame_no, tag, src_idx, hdr, hdr[15], hdr[6:0]);
+                        frame_no, tag, src_idx, hdr, hdr[15], hdr[7:0]);
             end
         end
     endtask
 
     // One-shot wide diagnostic: every source entry 0..255 (full RAMW=12
-    // table) and every destination slot 0..127, so the real enabled
+    // table) and every destination slot 0..255, so the real enabled
     // sort-key population can be seen without guessing which range matters.
     task automatic dma_trace_dump_full(input integer frame_no);
         integer idx;
@@ -326,15 +331,50 @@ module tb_escape_kids_full_smoke;
                 if (dma_trace_fd != 0 && hdr[15])
                     $fwrite(dma_trace_fd,
                         "{\"schema\":\"esckids-dma-src-full-v1\",\"frame\":%0d,\"entry\":%0d,\"hdr\":%0d,\"sortkey\":%0d}\n",
-                        frame_no, idx, hdr, hdr[6:0]);
+                        frame_no, idx, hdr, hdr[7:0]);
             end
-            for (idx = 0; idx <= 127; idx = idx + 1) begin
+            for (idx = 0; idx <= 255; idx = idx + 1) begin
                 hdr = { dut.u_game.u_video.u_obj.u_scan.u_even.u_hi.u_ram.mem[idx*4],
                         dut.u_game.u_video.u_obj.u_scan.u_even.u_lo.u_ram.mem[idx*4] };
                 if (dma_trace_fd != 0 && hdr[15])
                     $fwrite(dma_trace_fd,
                         "{\"schema\":\"esckids-dma-dst-full-v1\",\"frame\":%0d,\"slot\":%0d,\"hdr\":%0d}\n",
                         frame_no, idx, hdr);
+            end
+        end
+    endtask
+
+    task automatic dma_trace_dump_active_words(input integer frame_no);
+        integer obj_idx;
+        reg [15:0] sw0,sw1,sw2,sw3,sw4,sw5,sw6,sw7;
+        reg [15:0] dw0,dw1,dw2,dw3,dw4,dw5,dw6,dw7;
+        begin
+            for (obj_idx = 0; obj_idx <= 255; obj_idx = obj_idx + 1) begin
+                sw0 = {dut.u_game.u_video.u_obj.u_ram.u_hi.u_dual.u_ram.mem[obj_idx*8+0], dut.u_game.u_video.u_obj.u_ram.u_lo.u_dual.u_ram.mem[obj_idx*8+0]};
+                sw1 = {dut.u_game.u_video.u_obj.u_ram.u_hi.u_dual.u_ram.mem[obj_idx*8+1], dut.u_game.u_video.u_obj.u_ram.u_lo.u_dual.u_ram.mem[obj_idx*8+1]};
+                sw2 = {dut.u_game.u_video.u_obj.u_ram.u_hi.u_dual.u_ram.mem[obj_idx*8+2], dut.u_game.u_video.u_obj.u_ram.u_lo.u_dual.u_ram.mem[obj_idx*8+2]};
+                sw3 = {dut.u_game.u_video.u_obj.u_ram.u_hi.u_dual.u_ram.mem[obj_idx*8+3], dut.u_game.u_video.u_obj.u_ram.u_lo.u_dual.u_ram.mem[obj_idx*8+3]};
+                sw4 = {dut.u_game.u_video.u_obj.u_ram.u_hi.u_dual.u_ram.mem[obj_idx*8+4], dut.u_game.u_video.u_obj.u_ram.u_lo.u_dual.u_ram.mem[obj_idx*8+4]};
+                sw5 = {dut.u_game.u_video.u_obj.u_ram.u_hi.u_dual.u_ram.mem[obj_idx*8+5], dut.u_game.u_video.u_obj.u_ram.u_lo.u_dual.u_ram.mem[obj_idx*8+5]};
+                sw6 = {dut.u_game.u_video.u_obj.u_ram.u_hi.u_dual.u_ram.mem[obj_idx*8+6], dut.u_game.u_video.u_obj.u_ram.u_lo.u_dual.u_ram.mem[obj_idx*8+6]};
+                sw7 = {dut.u_game.u_video.u_obj.u_ram.u_hi.u_dual.u_ram.mem[obj_idx*8+7], dut.u_game.u_video.u_obj.u_ram.u_lo.u_dual.u_ram.mem[obj_idx*8+7]};
+                if (dma_trace_fd != 0 && sw0[15])
+                    $fwrite(dma_trace_fd,
+                        "{\"schema\":\"esckids-dma-src-words-v1\",\"frame\":%0d,\"entry\":%0d,\"w\":[%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d]}\n",
+                        frame_no,obj_idx,sw0,sw1,sw2,sw3,sw4,sw5,sw6,sw7);
+
+                dw0 = {dut.u_game.u_video.u_obj.u_scan.u_even.u_hi.u_ram.mem[obj_idx*4+0], dut.u_game.u_video.u_obj.u_scan.u_even.u_lo.u_ram.mem[obj_idx*4+0]};
+                dw1 = {dut.u_game.u_video.u_obj.u_scan.u_odd.u_hi.u_ram.mem[obj_idx*4+0],  dut.u_game.u_video.u_obj.u_scan.u_odd.u_lo.u_ram.mem[obj_idx*4+0]};
+                dw2 = {dut.u_game.u_video.u_obj.u_scan.u_even.u_hi.u_ram.mem[obj_idx*4+1], dut.u_game.u_video.u_obj.u_scan.u_even.u_lo.u_ram.mem[obj_idx*4+1]};
+                dw3 = {dut.u_game.u_video.u_obj.u_scan.u_odd.u_hi.u_ram.mem[obj_idx*4+1],  dut.u_game.u_video.u_obj.u_scan.u_odd.u_lo.u_ram.mem[obj_idx*4+1]};
+                dw4 = {dut.u_game.u_video.u_obj.u_scan.u_even.u_hi.u_ram.mem[obj_idx*4+2], dut.u_game.u_video.u_obj.u_scan.u_even.u_lo.u_ram.mem[obj_idx*4+2]};
+                dw5 = {dut.u_game.u_video.u_obj.u_scan.u_odd.u_hi.u_ram.mem[obj_idx*4+2],  dut.u_game.u_video.u_obj.u_scan.u_odd.u_lo.u_ram.mem[obj_idx*4+2]};
+                dw6 = {dut.u_game.u_video.u_obj.u_scan.u_even.u_hi.u_ram.mem[obj_idx*4+3], dut.u_game.u_video.u_obj.u_scan.u_even.u_lo.u_ram.mem[obj_idx*4+3]};
+                dw7 = {dut.u_game.u_video.u_obj.u_scan.u_odd.u_hi.u_ram.mem[obj_idx*4+3],  dut.u_game.u_video.u_obj.u_scan.u_odd.u_lo.u_ram.mem[obj_idx*4+3]};
+                if (dma_trace_fd != 0 && dw0[15])
+                    $fwrite(dma_trace_fd,
+                        "{\"schema\":\"esckids-dma-dst-words-v1\",\"frame\":%0d,\"slot\":%0d,\"w\":[%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d]}\n",
+                        frame_no,obj_idx,dw0,dw1,dw2,dw3,dw4,dw5,dw6,dw7);
             end
         end
     endtask
@@ -352,6 +392,11 @@ module tb_escape_kids_full_smoke;
             dma_rom_cs = 0;
             dma_dr_start_prev = 1'b0;
             dma_rom_cs_prev = 1'b0;
+            dma_scan_eval = 0;
+            dma_scan_draw = 0;
+            dma_scan_active = 1'b0;
+            dma_scan_obj_prev = 8'd0;
+            dma_scan_v = 9'd0;
         end else if (dma_trace_enabled) begin
             if (LVBL && !dma_lvbl_prev) begin
                 // Nothing: frame ordinal advances on the falling edge below,
@@ -372,10 +417,72 @@ module tb_escape_kids_full_smoke;
                 dma_obj_px = dma_obj_px + 1;
             if (dut.u_game.u_video.u_obj.u_scan.dr_start && !dma_dr_start_prev)
                 dma_dr_start = dma_dr_start + 1;
+            if (dut.u_game.u_video.u_obj.u_scan.dr_start && !dma_dr_start_prev && dma_scan_active)
+                dma_scan_draw = dma_scan_draw + 1;
+            if (dut.u_game.u_video.u_obj.u_scan.dr_start && !dma_dr_start_prev &&
+                dma_trace_fd != 0 && dma_frame_ord >= dma_detail_first &&
+                dma_frame_ord <= dma_detail_last)
+                $fwrite(dma_trace_fd,
+                    "{\"schema\":\"esckids-draw-launch-v1\",\"frame\":%0d,\"vdump\":%0d,\"slot\":%0d,\"code\":%0d,\"attr\":%0d,\"hpos\":%0d,\"ysub\":%0d,\"hzoom\":%0d,\"shadow\":%0d}\n",
+                    dma_frame_ord, dut.u_game.u_video.u_obj.u_scan.vdump,
+                    dut.u_game.u_video.u_obj.u_scan.u_scan.scan_obj,
+                    dut.u_game.u_video.u_obj.u_scan.code,
+                    dut.u_game.u_video.u_obj.u_scan.attr,
+                    dut.u_game.u_video.u_obj.u_scan.hpos,
+                    dut.u_game.u_video.u_obj.u_scan.ysub,
+                    dut.u_game.u_video.u_obj.u_scan.hzoom,
+                    dut.u_game.u_video.u_obj.u_scan.shd);
             dma_dr_start_prev = dut.u_game.u_video.u_obj.u_scan.dr_start;
             if (dut.u_game.u_video.lyro_cs && !dma_rom_cs_prev)
                 dma_rom_cs = dma_rom_cs + 1;
             dma_rom_cs_prev = dut.u_game.u_video.lyro_cs;
+
+            // A scan starts on the scanner's own qualified HS edge. Report
+            // the preceding line before resetting its counters. This makes
+            // a missed 256-entry deadline, a stuck draw engine, and a wrong
+            // line-buffer epoch directly distinguishable in one compact log.
+            if (dut.u_game.u_video.u_obj.u_scan.u_scan.cen2 &&
+                dut.u_game.u_video.u_obj.u_scan.hs &&
+                !dut.u_game.u_video.u_obj.u_scan.u_scan.hs_l &&
+                dut.u_game.u_video.u_obj.u_scan.vdump >= 9'h1e8 &&
+                dma_trace_fd != 0 && dma_frame_ord >= dma_detail_first &&
+                dma_frame_ord <= dma_detail_last)
+                $fwrite(dma_trace_fd,
+                    "{\"schema\":\"esckids-scan-window-v1\",\"frame\":%0d,\"vdump\":%0d,\"display_vdump\":%0d,\"lvbl\":%0d,\"restart\":%0d,\"done\":%0d,\"draw_busy\":%0d}\n",
+                    dma_frame_ord, dut.u_game.u_video.u_obj.u_scan.vdump,
+                    dut.u_game.u_video.u_scroll.esc_vdump, LVBL,
+                    dut.u_game.u_video.u_obj.u_scan.vdump > 9'h10d &&
+                    dut.u_game.u_video.u_obj.u_scan.vdump <=
+                        (dut.u_game.u_video.u_obj.u_scan.u_scan.gx975_hw ? 9'h1f7 : 9'h1f0),
+                    dut.u_game.u_video.u_obj.u_scan.u_scan.done,
+                    dut.u_game.u_video.u_obj.u_scan.u_scan.dr_busy);
+
+            if (dut.u_game.u_video.u_obj.u_scan.u_scan.cen2 &&
+                dut.u_game.u_video.u_obj.u_scan.hs &&
+                !dut.u_game.u_video.u_obj.u_scan.u_scan.hs_l &&
+                dut.u_game.u_video.u_obj.u_scan.vdump > 9'h10d &&
+                dut.u_game.u_video.u_obj.u_scan.vdump <=
+                    (dut.u_game.u_video.u_obj.u_scan.u_scan.gx975_hw ? 9'h1f7 : 9'h1f0)) begin
+                if (dma_scan_active && dma_trace_fd != 0 &&
+                    ((dma_frame_ord >= dma_detail_first && dma_frame_ord <= dma_detail_last) ||
+                     !dut.u_game.u_video.u_obj.u_scan.u_scan.done ||
+                     dut.u_game.u_video.u_obj.u_scan.u_scan.dr_busy || dma_scan_eval != 256))
+                    $fwrite(dma_trace_fd,
+                        "{\"schema\":\"esckids-scanline-v1\",\"frame\":%0d,\"vdump\":%0d,\"evaluated\":%0d,\"draws\":%0d,\"done\":%0d,\"draw_busy\":%0d,\"line_bank\":%0d}\n",
+                        dma_frame_ord, dma_scan_v, dma_scan_eval, dma_scan_draw,
+                        dut.u_game.u_video.u_obj.u_scan.u_scan.done,
+                        dut.u_game.u_video.u_obj.u_scan.u_scan.dr_busy,
+                        dut.u_game.u_video.u_obj.u_draw.u_gate.u_linebuf.line);
+                dma_scan_active = 1'b1;
+                dma_scan_v = dut.u_game.u_video.u_obj.u_scan.vdump;
+                dma_scan_eval = 0;
+                dma_scan_draw = 0;
+                dma_scan_obj_prev = 8'd0;
+            end else if (dma_scan_active &&
+                         dut.u_game.u_video.u_obj.u_scan.u_scan.scan_obj != dma_scan_obj_prev) begin
+                dma_scan_eval = dma_scan_eval + 1;
+                dma_scan_obj_prev = dut.u_game.u_video.u_obj.u_scan.u_scan.scan_obj;
+            end
 
             if (dut.u_game.u_video.u_obj.u_scan.dma_trig && !dma_trig_prev && dma_trace_fd != 0)
                 $fwrite(dma_trace_fd,
@@ -404,6 +511,8 @@ module tb_escape_kids_full_smoke;
                     dma_trace_dump_source(dma_frame_ord, "dma_bsy_done");
                 if (dma_frame_ord == 600)
                     dma_trace_dump_full(dma_frame_ord);
+                if (dma_frame_ord >= dma_detail_first && dma_frame_ord <= dma_detail_last)
+                    dma_trace_dump_active_words(dma_frame_ord);
             end
             dma_bsy_prev = dut.u_game.u_video.u_obj.u_scan.dma_bsy;
         end
@@ -432,6 +541,58 @@ module tb_escape_kids_full_smoke;
     reg [8:0] frame_vprev;
     reg frame_hld_prev, frame_vld_prev;
     integer tile_cpu_wr, tile_ram_we, tile_gfxcs_wr, pal_cpu_wr;
+
+`ifdef VERILATOR
+    reg [2047:0] priority_trace_file;
+    integer priority_trace_fd, priority_first, priority_last;
+    integer priority_limit, priority_count;
+    reg priority_prev_valid;
+    reg [8:0] priority_prev_h, priority_prev_v;
+    reg [8:0] priority_prev_obj;
+    reg [6:0] priority_prev_fix, priority_prev_a, priority_prev_b;
+    reg [4:0] priority_prev_obj_code;
+    reg [1:0] priority_prev_shadow;
+    reg [4:0] priority_prev_opaque;
+
+    always @(posedge clk) begin
+        if (rst) begin
+            priority_prev_valid = 1'b0;
+            priority_count = 0;
+        end else if (pxl_cen && priority_trace_fd != 0) begin
+            if (priority_prev_valid && priority_count < priority_limit) begin
+                $fwrite(priority_trace_fd,
+                    "{\"schema\":\"escape-kids-priority-pixel-v1\",\"seq\":%0d,\"frame\":%0d,\"hdump\":%0d,\"vdump\":%0d,\"obj_pixel\":%0d,\"fix_pixel\":%0d,\"a_pixel\":%0d,\"b_pixel\":%0d,\"obj_priority5\":%0d,\"obj_priority6\":%0d,\"ci2_priority\":%0d,\"ci3_priority\":%0d,\"ci4_priority\":%0d,\"shadow\":%0d,\"opaque_mask\":%0d,\"winner_priority\":%0d,\"winner_color\":%0d,\"output_color\":%0d}\n",
+                    priority_count, frame_ord, priority_prev_h, priority_prev_v,
+                    priority_prev_obj, priority_prev_fix, priority_prev_a,
+                    priority_prev_b, priority_prev_obj_code,
+                    {priority_prev_obj_code,1'b0},
+                    dut.u_game.u_video.u_colmix.u_prio.mmr[2],
+                    dut.u_game.u_video.u_colmix.u_prio.mmr[3],
+                    dut.u_game.u_video.u_colmix.u_prio.mmr[4],
+                    priority_prev_shadow, priority_prev_opaque,
+                    dut.u_game.u_video.u_colmix.u_prio.mix4p,
+                    dut.u_game.u_video.u_colmix.u_prio.mix4,
+                    dut.u_game.u_video.u_colmix.u_prio.cout);
+                priority_count = priority_count + 1;
+            end
+            priority_prev_valid = frame_ord >= priority_first &&
+                                  frame_ord <= priority_last &&
+                                  !dut.u_game.u_video.u_colmix.u_prio.op[1] &&
+                                  dut.u_game.u_video.u_colmix.u_prio.op[2] &&
+                                  (!dut.u_game.u_video.u_colmix.u_prio.op[3] ||
+                                   !dut.u_game.u_video.u_colmix.u_prio.op[4]);
+            priority_prev_h = dut.u_game.u_video.u_scroll.esc_hdump;
+            priority_prev_v = dut.u_game.u_video.u_scroll.esc_vdump;
+            priority_prev_obj = dut.u_game.u_video.lyro_pxl;
+            priority_prev_fix = dut.u_game.u_video.lyrf_pxl;
+            priority_prev_a = dut.u_game.u_video.lyra_pxl;
+            priority_prev_b = dut.u_game.u_video.lyrb_pxl;
+            priority_prev_obj_code = dut.u_game.u_video.obj_prio;
+            priority_prev_shadow = dut.u_game.u_video.obj_shd;
+            priority_prev_opaque = ~dut.u_game.u_video.u_colmix.u_prio.op;
+        end
+    end
+`endif
 
     // Where do the K052109 tilemap writes go?  Sampled on every clock, not
     // only at pxl_cen, because the CPU write cycle is clk-domain.
@@ -2076,6 +2237,15 @@ module tb_escape_kids_full_smoke;
         frame_vprev = 9'h1ff;
         frame_hld_prev = 1'b0;
         frame_vld_prev = 1'b0;
+`ifdef VERILATOR
+        priority_trace_file = "";
+        priority_trace_fd = 0;
+        priority_first = 0;
+        priority_last = 1000000;
+        priority_limit = 2000;
+        priority_count = 0;
+        priority_prev_valid = 1'b0;
+`endif
         buserror_trace_file = "";
         buserror_trace_fd = 0;
         buserror_seen = 0;
@@ -2194,6 +2364,19 @@ module tb_escape_kids_full_smoke;
                     $fatal(1, "Cannot open frame receipt %0s", frame_receipt_file);
             end
         end
+`ifdef VERILATOR
+        if ($value$plusargs("SMOKE_PRIORITY_TRACE=%s", priority_trace_file)) begin
+            priority_trace_fd = $fopen(priority_trace_file, "w");
+            if (priority_trace_fd == 0)
+                $fatal(1, "Cannot open priority trace %0s", priority_trace_file);
+            if (!$value$plusargs("SMOKE_PRIORITY_FIRST=%d", priority_first))
+                priority_first = 0;
+            if (!$value$plusargs("SMOKE_PRIORITY_LAST=%d", priority_last))
+                priority_last = 1000000;
+            if (!$value$plusargs("SMOKE_PRIORITY_LIMIT=%d", priority_limit))
+                priority_limit = 2000;
+        end
+`endif
         // jtframe_debug_keys drives gfx_en=4'hf on real hardware whenever the
         // debug key path is not compiled in, so every layer is enabled.  The
         // harness historically tied it to 0, which force-blanks lyrf/lyra/
@@ -2215,6 +2398,10 @@ module tb_escape_kids_full_smoke;
             dma_slot_watch[2] = 8'd4;
             dma_slot_watch[3] = 8'd8;
             dma_slot_watch[4] = 8'd9;
+            if (!$value$plusargs("SMOKE_DMA_DETAIL_FIRST=%d", dma_detail_first))
+                dma_detail_first = 420;
+            if (!$value$plusargs("SMOKE_DMA_DETAIL_LAST=%d", dma_detail_last))
+                dma_detail_last = 450;
         end
         if ($value$plusargs("SMOKE_SND_TRACE=%s", snd_trace_file)) begin
             snd_trace_fd = $fopen(snd_trace_file, "w");
@@ -2226,8 +2413,6 @@ module tb_escape_kids_full_smoke;
             snd_stop_frame = 0;
         if ($test$plusargs("SMOKE_TRACE_PHASE"))
             trace_phase = 1'b1;
-        if ($test$plusargs("SMOKE_HW_DEBUG"))
-            status[11] = 1'b1;
         barrier_frame = smoke_barrier == "frame";
         repeat (16) @(posedge clk);
         if (auth_mode) begin

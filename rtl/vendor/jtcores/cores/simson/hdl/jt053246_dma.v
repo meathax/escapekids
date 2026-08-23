@@ -47,23 +47,94 @@ module jt053246_dma(
 
 parameter K55673=0, K55673_DESC_SORT=0, EDGE_TRIGGER=0;
 
-wire        dma_we, hs_pos;
+wire        dma_we, hs_pos, clear_last;
 reg  [ 1:0] lvbl_sh;
 reg  [11:1] dma_bufa;
 reg  [15:0] dma_bufd;
 wire [ 7:0] sort_24x, sort_673;
 reg         dma_clr, dma_wait, dma_ok, dma_44, hsl;
 
+localparam [3:0] GX_IDLE            = 4'd0,
+                 GX_CLEAR           = 4'd1,
+                 GX_COUNT_ADDR      = 4'd2,
+                 GX_COUNT_WAIT      = 4'd3,
+                 GX_COUNT_SLOT      = 4'd4,
+                 GX_COUNT_WRITE     = 4'd5,
+                 GX_PREFIX_ADDR     = 4'd6,
+                 GX_PREFIX_WAIT     = 4'd7,
+                 GX_PREFIX_WRITE    = 4'd8,
+                 GX_COPY_HEAD_ADDR  = 4'd9,
+                 GX_COPY_HEAD_WAIT  = 4'd10,
+                 GX_COPY_SLOT_WAIT  = 4'd11,
+                 GX_COPY_SLOT_WRITE = 4'd12,
+                 GX_COPY_WORD_WAIT  = 4'd13,
+                 GX_COPY_WORD_WRITE = 4'd14,
+                 GX_COUNT_SLOT_WAIT = 4'd15;
+
+reg  [ 3:0] gx_state;
+reg  [ 7:0] gx_src, gx_prefix, gx_dest;
+reg  [ 2:0] gx_word;
+reg  [ 8:0] gx_running, zslot_q;
+reg  [15:0] gx_header;
+reg  [ 7:0] zslot_addr;
+reg         gx_enabled;
+reg         gx_we;
+reg  [10:0] gx_waddr;
+reg  [15:0] gx_wdata;
+
+(* ramstyle = "MLAB, no_rw_check" *) reg [8:0] zslot [0:255];
+wire [7:0] zslot_mem_addr = gx_state==GX_CLEAR ? dma_addr[8:1] : zslot_addr;
+wire       zslot_clear_we = gx_state==GX_CLEAR && dma_addr[11:9]==0;
+wire       zslot_count_we = gx_state==GX_COUNT_WRITE && gx_enabled;
+wire       zslot_prefix_we = gx_state==GX_PREFIX_WRITE;
+wire       zslot_copy_we = gx_state==GX_COPY_SLOT_WRITE && gx_enabled;
+wire       zslot_we = zslot_clear_we | zslot_count_we |
+                      zslot_prefix_we | zslot_copy_we;
+wire [8:0] zslot_din = zslot_clear_we  ? 9'd0 :
+                       zslot_count_we  ? zslot_q + 9'd1 :
+                       zslot_prefix_we ? gx_running : zslot_q + 9'd1;
+
 assign dma_wel = dma_we & ~dma_wr_addr[1];
 assign dma_weh = dma_we &  dma_wr_addr[1];
 
-assign dma_din     = dma_clr ? 16'h0 : dma_bufd;
-assign dma_we      = dma_clr | dma_ok;
-assign dma_wr_addr = dma_clr ? dma_addr[11:1] : dma_bufa;
+assign dma_din     = lut256 ? gx_wdata : (dma_clr ? 16'h0 : dma_bufd);
+assign dma_we      = lut256 ? gx_we : (dma_clr | dma_ok);
+assign dma_wr_addr = lut256 ? gx_waddr : (dma_clr ? dma_addr[11:1] : dma_bufa);
 assign hs_pos  = hs & ~hsl;
+assign clear_last = k44_en ? (lut256 ? &dma_addr[11:1] : &dma_addr[10:1]) :
+                             &dma_addr[11:1];
 
 assign sort_673 = dma_data[7:0]^{8{K55673_DESC_SORT[0]}};
-assign sort_24x ={ ~k44_en & dma_data[7], k44_en ? dma_data[6:0] : ~dma_data[6:0]};
+assign sort_24x = lut256 ? dma_data[7:0] :
+                   { ~k44_en & dma_data[7], k44_en ? dma_data[6:0] : ~dma_data[6:0]};
+
+always @* begin
+    gx_we    = 0;
+    gx_waddr = 0;
+    gx_wdata = 0;
+    case( gx_state )
+        GX_CLEAR: begin
+            gx_we    = 1;
+            gx_waddr = dma_addr[11:1];
+        end
+        GX_COPY_SLOT_WRITE: if( gx_enabled ) begin
+            gx_we    = 1;
+            gx_waddr = {zslot_q[7:0],3'd0};
+            gx_wdata = gx_header;
+        end
+        GX_COPY_WORD_WRITE: if( gx_enabled ) begin
+            gx_we    = 1;
+            gx_waddr = {gx_dest,gx_word};
+            gx_wdata = dma_data;
+        end
+        default:;
+    endcase
+end
+
+always @(posedge clk) if( pxl2_cen ) begin
+    zslot_q <= zslot[zslot_mem_addr];
+    if( zslot_we ) zslot[zslot_mem_addr] <= zslot_din;
+end
 
 // DMA logic
 always @(posedge clk, posedge rst) begin
@@ -99,6 +170,15 @@ always @(posedge clk) begin
         dma_wait <= 0;
         hsl      <= 0;
         flicker  <= 0;
+        gx_state <= GX_IDLE;
+        gx_src   <= 0;
+        gx_prefix<= 0;
+        gx_dest  <= 0;
+        gx_word  <= 0;
+        gx_running <= 0;
+        gx_header  <= 0;
+        zslot_addr <= 0;
+        gx_enabled <= 0;
     end else if( pxl2_cen ) begin
         hsl <= hs;
         if( hs_pos ) begin
@@ -107,19 +187,118 @@ always @(posedge clk) begin
         end
         if(!dma_bsy && (trigger || dma_44) ) begin
             dma_bsy  <= 1;
-            dma_clr  <= 1;
-            dma_wait <= !k44_en && mode8; // 8-bit speed: 595us, 16-bit: 297.5us
+            dma_clr  <= !lut256;
+            dma_wait <= !lut256 && !k44_en && mode8; // 8-bit speed: 595us, 16-bit: 297.5us
             flicker  <= ~flicker;
             dma_addr <= 0;
+            if( lut256 ) begin
+                gx_state   <= GX_CLEAR;
+                gx_src     <= 0;
+                gx_running <= 0;
+                gx_enabled <= 0;
+            end
         end
         if( !dma_bsy ) begin
             dma_addr <= 0;
             dma_bufa <= 0;
             dma_ok   <= 0;
+        end else if( lut256 ) begin
+            case( gx_state )
+                GX_CLEAR: begin
+                    if( &dma_addr[11:1] ) begin
+                        dma_addr <= 0;
+                        gx_src   <= 0;
+                        gx_state <= GX_COUNT_ADDR;
+                    end else begin
+                        dma_addr[11:1] <= dma_addr[11:1] + 1'd1;
+                    end
+                end
+                GX_COUNT_ADDR: begin
+                    dma_addr <= {2'b00,gx_src,3'd0};
+                    gx_state <= GX_COUNT_WAIT;
+                end
+                GX_COUNT_WAIT: gx_state <= GX_COUNT_SLOT;
+                GX_COUNT_SLOT: begin
+                    gx_enabled <= dma_data[15];
+                    zslot_addr <= dma_data[7:0];
+                    gx_state   <= GX_COUNT_SLOT_WAIT;
+                end
+                GX_COUNT_SLOT_WAIT: gx_state <= GX_COUNT_WRITE;
+                GX_COUNT_WRITE: begin
+                    if( &gx_src ) begin
+                        gx_prefix  <= 0;
+                        gx_running <= 0;
+                        gx_state   <= GX_PREFIX_ADDR;
+                    end else begin
+                        gx_src   <= gx_src + 1'd1;
+                        gx_state <= GX_COUNT_ADDR;
+                    end
+                end
+                GX_PREFIX_ADDR: begin
+                    zslot_addr <= gx_prefix;
+                    gx_state   <= GX_PREFIX_WAIT;
+                end
+                GX_PREFIX_WAIT: gx_state <= GX_PREFIX_WRITE;
+                GX_PREFIX_WRITE: begin
+                    gx_running <= gx_running + zslot_q;
+                    if( &gx_prefix ) begin
+                        gx_src   <= 0;
+                        gx_state <= GX_COPY_HEAD_ADDR;
+                    end else begin
+                        gx_prefix <= gx_prefix + 1'd1;
+                        gx_state  <= GX_PREFIX_ADDR;
+                    end
+                end
+                GX_COPY_HEAD_ADDR: begin
+                    dma_addr <= {2'b00,gx_src,3'd0};
+                    gx_state <= GX_COPY_HEAD_WAIT;
+                end
+                GX_COPY_HEAD_WAIT: begin
+                    gx_header  <= dma_data;
+                    gx_enabled <= dma_data[15];
+                    zslot_addr <= dma_data[7:0];
+                    gx_state   <= GX_COPY_SLOT_WAIT;
+                end
+                GX_COPY_SLOT_WAIT: gx_state <= GX_COPY_SLOT_WRITE;
+                GX_COPY_SLOT_WRITE: begin
+                    if( gx_enabled ) begin
+                        gx_dest <= zslot_q[7:0];
+                        gx_word <= 3'd1;
+                        dma_addr <= {2'b00,gx_src,3'd1};
+                        gx_state <= GX_COPY_WORD_WAIT;
+                    end else if( &gx_src ) begin
+                        dma_bsy  <= 0;
+                        gx_state <= GX_IDLE;
+                    end else begin
+                        gx_src   <= gx_src + 1'd1;
+                        gx_state <= GX_COPY_HEAD_ADDR;
+                    end
+                end
+                GX_COPY_WORD_WAIT: gx_state <= GX_COPY_WORD_WRITE;
+                GX_COPY_WORD_WRITE: begin
+                    if( gx_word==3'd6 ) begin
+                        if( &gx_src ) begin
+                            dma_bsy  <= 0;
+                            gx_state <= GX_IDLE;
+                        end else begin
+                            gx_src   <= gx_src + 1'd1;
+                            gx_state <= GX_COPY_HEAD_ADDR;
+                        end
+                    end else begin
+                        gx_word <= gx_word + 1'd1;
+                        dma_addr <= {2'b00,gx_src,gx_word + 1'd1};
+                        gx_state <= GX_COPY_WORD_WAIT;
+                    end
+                end
+                default: begin
+                    dma_bsy  <= 0;
+                    gx_state <= GX_IDLE;
+                end
+            endcase
         end else if( dma_clr ) begin // copy by priority order
             dma_addr[11:1] <= dma_addr[11:1] + 1'd1;
-            dma_clr <= ~&{ dma_addr[11]|k44_en, dma_addr[10:1] };
-            if( k44_en ) dma_addr[11]<=0;
+            dma_clr <= ~clear_last;
+            if( k44_en && !lut256 ) dma_addr[11]<=0;
             if( &dma_addr[11:1] && dma_wait ) dma_addr[11:1] <= 'h218; // extra 126us wait
         end else if(dma_wait) begin // extra time to match the original speed
             { dma_wait, dma_addr[11:1] } <= { 1'b1, dma_addr[11:1] } + 1'd1;

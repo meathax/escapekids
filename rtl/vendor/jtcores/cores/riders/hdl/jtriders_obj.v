@@ -57,7 +57,7 @@ module jtriders_obj #(parameter
     input             objcha_n,
 
     // pixel output
-    output            shd,      // shadow
+    output     [ 1:0] shd,      // shadow preset
     output     [ 4:0] prio,
     output     [ 8:0] pxl,
 
@@ -72,7 +72,7 @@ module jtriders_obj #(parameter
 
 localparam SHADOW_PEN = SHADOW[0]==1 ? 4'd15 : 4'd0;
 
-wire        pre_shd;
+wire [ 1:0] pre_shd;
 wire [ 3:0] pen_eff;
 wire [15:0] ram_data, dma_data;
 wire [22:2] pre_addr;
@@ -83,7 +83,7 @@ wire [15:0] pre_pxl;
 // Draw module
 wire        dr_start, dr_busy;
 wire [15:0] code;
-wire [ 6:0] attr;     // OC pins
+wire [ 9:0] attr;     // OC pins / GX975 color word
 wire        hflip, vflip, hz_keep, pre_cs;
 wire [ 9:0] hpos;
 wire [ 3:0] ysub;
@@ -182,8 +182,8 @@ assign dma_addr  = lgtnfght ? {scn_addr[10:4],2'b00,scn_addr[3:1],1'b0} : scn_ad
 // 053244 (parodius) has 7 palette bits, top 2 used for priority
 assign pen15   = &pre_pxl[3:0];
 assign pen_eff = (pre_pxl[15:14]==0 || !pen15) ? pre_pxl[3:0] : 4'd0; // real color or 0 if shadow
-assign shd     =  pre_pxl[14];
-assign prio    =  {1'd1,pre_pxl[10:9],2'd0} ;
+assign shd     =  pre_pxl[15:14];
+assign prio    =  esckids ? pre_pxl[13:9] : {1'd1,pre_pxl[10:9],2'd0};
 assign pxl     = gfx_en[3] ? {pre_pxl[8:4], pen_eff} : 9'd0;
 
 jt053244 #(.HFLIP_OFFSET(HFLIP_OFFSET), .GX975(GX975)
@@ -261,7 +261,7 @@ jtframe_objdraw #(
 
     .hflip      ( ~hflip        ),
     .vflip      ( vflip         ),
-    .pal        ({1'b0,pre_shd, 3'b0, attr}),
+    .pal        ({pre_shd,attr}),
 
     .rom_addr   ( pre_addr      ),
     .rom_cs     ( pre_cs        ),

@@ -578,7 +578,7 @@ always @(posedge clk) begin
                 irqen      <= cpu_dout[6];
             end
 `ifdef SIMULATION
-            if( cpu_we && A==16'h3fda )
+            if( cpu_we && A==16'h3fda && $test$plusargs("SMOKE_NOOP_DIAG") )
                 $display("Escape Kids write to documented no-op/watchdog candidate: %02X",cpu_dout);
 `endif
             if( joystk_cs ) case( A[1:0] )

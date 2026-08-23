@@ -40,7 +40,7 @@ module jt053244(    // sprite logic
     // ROM addressing 22 bits in total
     output     [15:0] code,
     // There are 22 bits communicating both chips on the PCB
-    output     [ 6:0] attr,     // OC pins
+    output     [ 9:0] attr,     // OC pins / GX975 color word
     output            hflip,
     output            vflip,
     output     [ 9:0] hpos,
@@ -58,7 +58,7 @@ module jt053244(    // sprite logic
 
     // shadow
     input      [ 8:0] pxl,
-    output            shd,
+    output     [ 1:0] shd,
 
     // indr module / 051937
     output            dr_start,

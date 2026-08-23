@@ -20,6 +20,10 @@
 `define JTFRAME_JOY1_POS
 `define JTFRAME_RATE 59.19
 `define JTFRAME_BA1_START 26'h080000
+// Bank 0 is serviced by the MiSTer SDRAM wrapper as a 32-bit burst.
+// Propagate that physical burst width into the generated ROM slot so its
+// two-beat cache captures the same line phase as the board controller.
+`define JTFRAME_BA0_LEN 32
 `define PCM_START 26'h0A0000
 `define JTFRAME_BA2_START 26'h1E0000
 `define JTFRAME_BA3_START 26'h2E0000
@@ -31,14 +35,15 @@
 `define JTFRAME_ARY 4
 // Defaults emitted by JTFRAME for non-line-buffer MiSTer targets.
 `define JTFRAME_180SHIFT 0
-`define JTFRAME_SHIFT 0
+`define JTFRAME_SHIFT 1
 `define JTFRAME_LF_HW 9
 `define JTFRAME_LF_VW 8
 `define JTFRAME_MCLK 48000000
 `define JTFRAME_TIMESTAMP 0
 `define JTFRAME_MR_FASTIO 0
-`define JTFRAME_DEBUG_VPOS 4
 `define JTFRAME_DIALEMU_LEFT 5
+`define JTFRAME_RELEASE
+`define JTFRAME_DEBUG_VPOS 0
 `define JTKCPU_DEBUG
 `define GAME_ROM_LEN 26'h6E0000
 

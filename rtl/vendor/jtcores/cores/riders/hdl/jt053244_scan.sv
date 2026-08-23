@@ -23,7 +23,7 @@
     // ROM addressing 22 bits in total
     output reg [15:0] code,
     // There are 22 bits communicating both chips on the PCB
-    output reg [ 6:0] attr,     // OC pins
+    output reg [ 9:0] attr,     // OC pins / GX975 color word
     output            hflip,
     output reg        vflip,
     output reg [ 9:0] hpos,
@@ -46,7 +46,7 @@
     output     [11:2] scan_addr,
 
     // shadow
-    output reg        shd,
+    output reg [ 1:0] shd,
 
     // indr module / 051937
     output reg        dr_start,
@@ -64,7 +64,7 @@ parameter HFLIP_OFFSET = 0,
 
 reg  [18:0] yz_add;
 reg  [11:0] vzoom;
-reg  [ 9:0] y, y2, x, ydiff, ydiff_b, xadj, yadj;
+reg  [ 9:0] y, y2, x, x2, ydiff, ydiff_b, xadj, yadj;
 reg  [ 8:0] vlatch, ymove, full_h, vscl, hscl, full_w;
 reg  [ 7:0] scan_obj; // max 256 objects
 reg  [ 3:0] size;
@@ -76,6 +76,7 @@ reg         inzone, hs_l, done, hdone,
 wire [ 9:0] hflip_off;
 wire [ 1:0] nx_mir, hsz, vsz;
 wire        last_obj;
+wire [ 7:0] scan_next;
 wire        gx975_path = GX975 && gx975;
 // Strap-only Escape Kids selector.  The 053246 sprite-table size and the
 // display-window offset polarity are wiring properties of the chip pair, not
@@ -93,7 +94,8 @@ reg  [ 6:0] pri;
 assign hflip     = (ghf ^ pre_hf)&!hmir | hmir_eff;
 assign scan_addr = { scan_obj, scan_sub };
 assign ysub      = ydiff[3:0];
-assign last_obj  = &scan_obj[6:0];
+assign last_obj  = gx975_hw ? scan_obj==0 : &scan_obj[6:0];
+assign scan_next = gx975_hw ? scan_obj-1'd1 : scan_obj+1'd1;
 // Donor 053244/5 (parodius/lgtnfght/tmnt2) keeps its real mirror-y/mirror-x
 // bits at word6[9:8]. Escape Kids (GX975) is wired to a real 053246/053247
 // pair instead: MAME's own k053246_k053247_k055673.cpp sprite-format table
@@ -152,6 +154,7 @@ endfunction
 always @* begin
     ymove  = zmove( vsz, vscl );
     y2     = y + {1'b0,ymove};
+    x2     = x - zmove( hsz, hscl );
     ydiff_b= y2 + { vlatch[8], vlatch };
     ydiff  = yz_add[6+:10];
     // test ver/parodius/scene/9 -> "bomb", scan_obj 5
@@ -220,9 +223,10 @@ always @(posedge clk, posedge rst) begin
     end else if( cen2 ) begin
         hs_l <= hs;
         dr_start <= 0;
-        if( hs && !hs_l && vdump>9'h10D && vdump<9'h1f1) begin
+        if( hs && !hs_l && vdump>9'h10D &&
+            vdump<=(gx975_hw ? 9'h1F7 : 9'h1F0)) begin
             done     <= 0;
-            scan_obj <= 0;
+            scan_obj <= gx975_hw ? 8'hff : 0;
             scan_sub <= 0;
             vlatch   <= vdump;
         end else if( !done ) begin
@@ -238,7 +242,7 @@ always @(posedge clk, posedge rst) begin
                     // if( !scan_even[15]  || scan_obj[6:0]!=2  ) begin
                     if( !scan_even[15] `ifndef JTFRAME_RELEASE || (scan_obj[6:0]==debug_bus[6:0] && flicker) `endif ) begin
                         scan_sub <= 0;
-                        scan_obj <= scan_obj + 1'd1;
+                        scan_obj <= scan_next;
                         if( last_obj ) done <= 1;
                     end
                 end
@@ -279,7 +283,17 @@ always @(posedge clk, posedge rst) begin
                 end
                 3: begin
                     { vmir, hmir } <= nx_mir;
-                    { shd, attr } <= scan_even[7:0];
+                    if( gx975_path ) begin
+                        // GX975 word 6 carries three shadow presets in bits
+                        // 11:10 and the 10-bit color/priority word in 9:0.
+                        shd  <= scan_even[11:10];
+                        attr <= scan_even[9:0];
+                    end else begin
+                        // Preserve the donor K053244/5 mapping (shadow bit 7,
+                        // seven attribute bits 6:0).
+                        shd  <= {1'b0,scan_even[7]};
+                        attr <= {3'b0,scan_even[6:0]};
+                    end
                     // Global Y flip does not invert a locally mirrored sprite.
                     vflip <= pre_vf ^ (gvf & ~nx_mir[1]) ^ vmir_eff;
                 end
@@ -292,7 +306,7 @@ always @(posedge clk, posedge rst) begin
                     // at the end of level 1 in Simpsons (see scene 3)
                     if( ~inzone ) begin
                         { indr, scan_sub } <= 0;
-                        scan_obj <= scan_obj + 1'd1;
+                        scan_obj <= scan_next;
                         if( last_obj ) done <= 1;
                     end
                 end
@@ -306,7 +320,12 @@ always @(posedge clk, posedge rst) begin
                     if( (!dr_start && !dr_busy) || !inzone ) begin
                         {code[4],code[2],code[0]} <= hcode + hsum;
                         if( hstep==0 ) begin
-                            hpos <= x - zmove( hsz, hscl );
+                            // GX975 wraps the 10-bit line-buffer origin after
+                            // applying ox-offx and the zoomed half-width.
+                            // There is no additional edge offset in the MAME
+                            // K053246 path; adding one displaces edge pixels
+                            // into the opposite side of the frame.
+                            hpos <= x2;
                         end else begin
                             hpos <= hpos + 10'h10;
                             hz_keep <= 1;
@@ -315,7 +334,7 @@ always @(posedge clk, posedge rst) begin
                         dr_start <= inzone;
                         if( hdone || !inzone ) begin
                             { indr, scan_sub } <= 0;
-                            scan_obj <= scan_obj + 1'd1;
+                            scan_obj <= scan_next;
                             indr     <= 0;
                             // hz_keep <= 0;
                             if( last_obj ) done <= 1;

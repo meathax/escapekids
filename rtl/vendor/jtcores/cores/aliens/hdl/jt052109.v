@@ -84,6 +84,8 @@ module jt052109(
 );
 
 parameter FULLRAM=0;
+parameter [8:0] ROWSCR_START=9'h028,
+                ROWSCR_END  =9'h04f;
 
 // MMR go from 1C00 to 1F00
 localparam [15:0] REGBASE = 16'h1C00;
@@ -356,8 +358,8 @@ always @(posedge clk) begin
 //         if( vdump==8'hfc && vdumpl!=8'hfc  ) framecnt <= framecnt+1;
 // `endif
         vaddr     <= vaddr_nx;
-        // rd_rowscr: 9'h27 prevents wrong data on right border on (flip mode)
-        rd_rowscr <= hdump<9'h4f && hdump>9'h27;
+        // Keep row-scroll RAM reads outside each board's active window.
+        rd_rowscr <= hdump<ROWSCR_END && hdump>=ROWSCR_START;
         vdumpf    <= rd_rowscr ? vdump : vdump^{9{flip}};
         if( pxl_cen ) begin
             if( !rd_rowscr ) case( hdump[1:0] )

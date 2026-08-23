@@ -25,8 +25,9 @@ reg  [8:0] vdump=9'h0F8, hdump=9'h020;
 
 // ---- scan <-> LUT model -------------------------------------------------
 wire [15:0] code;
-wire [ 6:0] attr;
-wire        hflip, vflip, hz_keep, shd, dr_start;
+wire [ 9:0] attr;
+wire        hflip, vflip, hz_keep, dr_start;
+wire [ 1:0] shd;
 wire [ 9:0] hpos;
 wire [ 3:0] ysub;
 wire [11:0] hzoom;
@@ -147,7 +148,7 @@ jtframe_objdraw #(
     .hzoom      ( hzoom         ),
     .hflip      ( ~hflip        ),
     .vflip      ( vflip         ),
-    .pal        ({1'b0,shd, 3'b0, attr}),
+    .pal        ({shd,attr}),
     .rom_addr   ( pre_addr      ),
     .rom_cs     ( pre_cs        ),
     .rom_ok     ( 1'b1          ),
@@ -157,6 +158,17 @@ jtframe_objdraw #(
 
 // ---- write logging ------------------------------------------------------
 integer logline=0;
+reg seen_shd1=0, seen_shd2=0, seen_shd3=0;
+always @(negedge clk) begin
+    if( u_scan.cen2 && {u_scan.indr,u_scan.scan_sub}==3'd4 ) begin
+        case( u_scan.scan_obj )
+            8'd1: begin if( shd!==2'd1 ) $fatal(1,"shadow mode1 transport=%0d",shd); seen_shd1=1; end
+            8'd2: begin if( shd!==2'd2 ) $fatal(1,"shadow mode2 transport=%0d",shd); seen_shd2=1; end
+            8'd3: begin if( shd!==2'd3 ) $fatal(1,"shadow mode3 transport=%0d",shd); seen_shd3=1; end
+            default:;
+        endcase
+    end
+end
 always @(posedge clk) begin
     if( logline && u_scan.cen2 && u_scan.scan_obj>=1 && u_scan.scan_obj<=4 )
         $display("SC line=%03x obj=%0d sub=%0d%0d y=%0d x=%0d ydiff=%0d ydiff_b=%0d inzone=%b vlatch=%03x",
@@ -197,11 +209,11 @@ endtask
 initial begin
     for(i=0;i<1024;i=i+1) begin even_mem[i]=0; odd_mem[i]=0; end
     // A: live char-select coin sprite (e113): 4x4 tiles, zx=0x20, no flip
-    set_spr(8'd1, 16'h8a71,16'h3360,16'h00c8,16'h01b9,16'h0040,16'h0020,16'h0185,16'h0000);
+    set_spr(8'd1, 16'h8a71,16'h3360,16'h00c8,16'h01b9,16'h0040,16'h0020,16'h0585,16'h0000);
     // B: live TOP PLAYERS banner left ornament (e0): 2x2, flipx=1, ox=+262
-    set_spr(8'd2, 16'h9500,16'h5c90,16'h00dc,16'h0106,16'h0040,16'h0020,16'h002e,16'h0000);
+    set_spr(8'd2, 16'h9500,16'h5c90,16'h00dc,16'h0106,16'h0040,16'h0020,16'h082e,16'h0000);
     // C: its raw-wraparound partner (e1): 2x2, flipx=0, ox raw=0x2FA (=762)
-    set_spr(8'd3, 16'h8501,16'h5c84,16'h00dc,16'h02fa,16'h0040,16'h0020,16'h002e,16'h0000);
+    set_spr(8'd3, 16'h8501,16'h5c84,16'h00dc,16'h02fa,16'h0040,16'h0020,16'h0c2e,16'h0000);
     // D: synthetic partial-left clip: 2x2, flipx=0, ox raw=0xC2 (=194)
     set_spr(8'd4, 16'h8500,16'h1234,16'h00c8,16'h00c2,16'h0040,16'h0020,16'h0000,16'h0000);
 
@@ -213,6 +225,8 @@ initial begin
     run_line(9'h127, 0);
     run_line(9'h128, 1);
     run_line(9'h129, 1);
+    if( !seen_shd1 || !seen_shd2 || !seen_shd3 )
+        $fatal(1,"shadow transport coverage mode1=%0d mode2=%0d mode3=%0d",seen_shd1,seen_shd2,seen_shd3);
     $display("TB_DONE");
     $finish;
 end

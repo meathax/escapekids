@@ -40,8 +40,6 @@ wire [ 7:0] dbg_cpu_din, dbg_aupper, dbg_last_op,
             dbg_trap_op, dbg_trap_data, dbg_trap_flags,
             dbg_hist_op, dbg_hist_data, dbg_hist_flags, dbg_cpu_reg_byte;
 wire [ 7:0] core_red, core_green, core_blue;
-wire [ 7:0] dbg_video_ever, dbg_sound_ever;
-wire [15:0] dbg_palette_writes, dbg_sound_events, dbg_audio_nonzero;
 wire [ 3:0] dbg_hist_index, dbg_reg_index, dbg_hist_wr;
 wire [12:0] ram_addr;
 wire [18:0] main_rom_addr;
@@ -60,8 +58,6 @@ wire [ 3:0] pcm_fill_cs;
 wire [ 6:0] input_joystick1, input_joystick2,
             input_joystick3, input_joystick4;
 reg  [ 3:0] pcm_bsy_d;
-reg  [ 7:0] debug_mux;
-wire [ 7:0] hw_debug_view;
 reg         simson, paroda, vendetta, suratk, esckids, cabinet_2p;
 
 `ifdef SIMULATION
@@ -78,13 +74,13 @@ initial begin
 end
 `endif
 
-// Escape Kids diagnostics are boot-visible by design.  The black-screen
-// failure prevents relying on the OSD status write that formerly enabled this
-// path; page and history-slot selection remain status-controlled below.
-assign debug_view = esckids ? hw_debug_view : debug_mux;
+assign debug_view = 8'd0;
 assign ram_din    = cpu_dout;
 assign ioctl_din  = video_dump;
 assign video_dumpa= ioctl_addr[15:0]-16'h80;
+assign red        = core_red;
+assign green      = core_green;
+assign blue       = core_blue;
 // The generated memory wrapper shares main_addr between the program-ROM
 // request slot and work BRAM.  Present the ROM address only for an active ROM
 // request; all other CPU cycles expose the physical 13-bit work-RAM address.
@@ -112,182 +108,6 @@ escape_kids_rom_ready u_main_rom_ready(
     .rom_addr   ( main_rom_addr ),
     .rom_ok     ( main_ok       ),
     .cpu_rom_ok ( main_cpu_ok   )
-);
-
-escape_kids_hw_debug u_hw_debug(
-    .clk            ( clk48             ),
-    .rst            ( rst48             ),
-    .enable         ( esckids           ),
-    .page           ( status[27:23]     ),
-    .hist_sel       ( status[31:28]     ),
-    .live_pc        ( dbg_pc            ),
-    .pcbad          ( dbg_pcbad         ),
-    .live_addr      ( cpu_addr          ),
-    .last_op        ( dbg_last_op       ),
-    .cpu_din        ( dbg_cpu_din       ),
-    .rom_data       ( main_data         ),
-    .aupper         ( dbg_aupper        ),
-    .trap_pc        ( dbg_trap_pc       ),
-    .trap_addr      ( dbg_trap_addr     ),
-    .trap_op        ( dbg_trap_op       ),
-    .trap_data      ( dbg_trap_data     ),
-    .trap_flags     ( dbg_trap_flags    ),
-    .hist_pc        ( dbg_hist_pc       ),
-    .hist_addr      ( dbg_hist_addr     ),
-    .hist_op        ( dbg_hist_op       ),
-    .hist_data      ( dbg_hist_data     ),
-    .hist_flags     ( dbg_hist_flags    ),
-    .cpu_reg_byte   ( dbg_cpu_reg_byte  ),
-    .accept_count   ( dbg_accept_count  ),
-    .trap_seen      ( dbg_trap_seen     ),
-    .berr_l         ( dbg_berr_l        ),
-    .buserror       ( dbg_buserror      ),
-    .dtack          ( dbg_dtack         ),
-    .eep_rdy        ( dbg_eep_rdy       ),
-    .main_cs        ( main_cs           ),
-    .main_ok        ( main_ok           ),
-    .main_cpu_ok    ( main_cpu_ok       ),
-    .cpu_cen        ( cpu_cen           ),
-    .pal_we         ( pal_we            ),
-    .tilesys_cs     ( tilesys_cs        ),
-    .objsys_cs      ( objsys_cs         ),
-    .objreg_cs      ( objreg_cs         ),
-    .pcu_cs         ( pcu_cs            ),
-    .k053252_cs     ( k053252_cs        ),
-    .rmrd           ( rmrd              ),
-    .lvbl           ( LVBL              ),
-    .lhbl           ( LHBL              ),
-    .pxl_cen        ( pxl_cen           ),
-    .red            ( red               ),
-    .green          ( green             ),
-    .blue           ( blue              ),
-    .snd_cs         ( snd_cs            ),
-    .snd_ok         ( snd_ok            ),
-    .snd_irq        ( snd_irq           ),
-    .pcm_bsy        ( pcm_bsy           ),
-    .pcm_sample     ( pcm_sample        ),
-    .pcm_warm       ( pcm_prefetch_warm ),
-    .pcm_underrun   ( pcm_prefetch_underrun ),
-    .snd_l          ( snd_l             ),
-    .snd_r          ( snd_r             ),
-    .esckids        ( esckids           ),
-    .cabinet_2p     ( cabinet_2p        ),
-    .rst24          ( rst24             ),
-    .rst48          ( rst48             ),
-    .rst96          ( rst96             ),
-    .irq_n          ( cpu_irqn          ),
-    .firq_n         ( cpu_firqn         ),
-    .nmi_n          ( cpu_nmin          ),
-    .dma_bsy        ( dma_bsy           ),
-    .debug_view     ( hw_debug_view     ),
-    .video_ever     ( dbg_video_ever    ),
-    .sound_ever     ( dbg_sound_ever    ),
-    .palette_writes ( dbg_palette_writes),
-    .sound_events   ( dbg_sound_events  ),
-    .audio_nonzero  ( dbg_audio_nonzero )
-);
-
-escape_kids_debug_overlay u_debug_overlay(
-    .clk            ( clk48             ),
-    .rst            ( rst48             ),
-    .enable         ( esckids           ),
-    .slot           ( status[31:28]     ),
-    .pxl_cen        ( pxl_cen           ),
-    .lhbl           ( LHBL              ),
-    .lvbl           ( LVBL              ),
-    .core_red       ( core_red          ),
-    .core_green     ( core_green        ),
-    .core_blue      ( core_blue         ),
-    .live_pc        ( dbg_pc            ),
-    .pcbad          ( dbg_pcbad         ),
-    .live_addr      ( cpu_addr          ),
-    .last_op        ( dbg_last_op       ),
-    .cpu_din        ( dbg_cpu_din       ),
-    .rom_data       ( main_data         ),
-    .aupper         ( dbg_aupper        ),
-    .trap_pc        ( dbg_trap_pc       ),
-    .trap_addr      ( dbg_trap_addr     ),
-    .trap_op        ( dbg_trap_op       ),
-    .trap_data      ( dbg_trap_data     ),
-    .trap_flags     ( dbg_trap_flags    ),
-    .hist_pc        ( dbg_hist_pc       ),
-    .hist_addr      ( dbg_hist_addr     ),
-    .hist_op        ( dbg_hist_op       ),
-    .hist_data      ( dbg_hist_data     ),
-    .hist_flags     ( dbg_hist_flags    ),
-    .hist_wr        ( dbg_hist_wr       ),
-    .cpu_reg_byte   ( dbg_cpu_reg_byte  ),
-    .accept_count   ( dbg_accept_count  ),
-    .trap_seen      ( dbg_trap_seen     ),
-    .berr_l         ( dbg_berr_l        ),
-    .buserror       ( dbg_buserror      ),
-    .dtack          ( dbg_dtack         ),
-    .eep_rdy        ( dbg_eep_rdy       ),
-    .main_cs        ( main_cs           ),
-    .main_ok        ( main_ok           ),
-    .main_cpu_ok    ( main_cpu_ok       ),
-    .cpu_cen        ( cpu_cen           ),
-    .main_rom_addr  ( main_rom_addr     ),
-    .ram_addr       ( ram_addr          ),
-    .cpu_we         ( cpu_we            ),
-    .ram_we         ( ram_we            ),
-    .tilesys_cs     ( tilesys_cs        ),
-    .objsys_cs      ( objsys_cs         ),
-    .objreg_cs      ( objreg_cs         ),
-    .pcu_cs         ( pcu_cs            ),
-    .k053252_cs     ( k053252_cs        ),
-    .rmrd           ( rmrd              ),
-    .dma_bsy        ( dma_bsy           ),
-    .video_now      ( {LVBL,LHBL,pxl_cen,|{core_red,core_green,core_blue},
-                        pal_we,tilesys_cs,objsys_cs,k053252_cs} ),
-    .video_ever     ( dbg_video_ever    ),
-    .palette_writes ( dbg_palette_writes),
-    .sound_now      ( {snd_cs,snd_ok,snd_irq,|pcm_bsy,|pcm_sample,
-                        |{snd_l,snd_r},rmrd,dbg_eep_rdy} ),
-    .sound_ever     ( dbg_sound_ever    ),
-    .sound_events   ( dbg_sound_events  ),
-    .audio_nonzero  ( dbg_audio_nonzero ),
-    .snd_irq        ( snd_irq           ),
-    .snd_ok         ( snd_ok            ),
-    .snd_cs         ( snd_cs            ),
-    .pcm_bsy        ( pcm_bsy           ),
-    .pcm_sample     ( pcm_sample        ),
-    .pcm_warm       ( pcm_prefetch_warm ),
-    .pcm_underrun   ( pcm_prefetch_underrun ),
-    .pcm_fill_cs    ( pcm_fill_cs       ),
-    .pcm_reverse    ( pcm_reverse       ),
-    .snd_l          ( snd_l             ),
-    .snd_r          ( snd_r             ),
-    .pcm_addr_a     ( pcm_raw_addr_a    ),
-    .pcm_addr_b     ( pcm_raw_addr_b    ),
-    .pcm_addr_c     ( pcm_raw_addr_c    ),
-    .pcm_addr_d     ( pcm_raw_addr_d    ),
-    .pcm_fill_addr_a( pcm_fill_addr_a   ),
-    .pcm_fill_addr_b( pcm_fill_addr_b   ),
-    .pcm_fill_addr_c( pcm_fill_addr_c   ),
-    .pcm_fill_addr_d( pcm_fill_addr_d   ),
-    .lyrf_cs        ( lyrf_cs           ),
-    .lyra_cs        ( lyra_cs           ),
-    .lyrb_cs        ( lyrb_cs           ),
-    .lyro_cs        ( lyro_cs           ),
-    .lyra_ok        ( lyra_ok           ),
-    .lyro_ok        ( lyro_ok           ),
-    .objcha_n       ( objcha_n          ),
-    .esckids        ( esckids           ),
-    .cabinet_2p     ( cabinet_2p        ),
-    .init           ( init              ),
-    .rst8           ( rst8              ),
-    .rst24          ( rst24             ),
-    .rst48          ( rst48             ),
-    .rst96          ( rst96             ),
-    .irq_n          ( cpu_irqn          ),
-    .firq_n         ( cpu_firqn         ),
-    .nmi_n          ( cpu_nmin          ),
-    .hist_index     ( dbg_hist_index    ),
-    .reg_index      ( dbg_reg_index     ),
-    .red            ( red               ),
-    .green          ( green             ),
-    .blue           ( blue              )
 );
 
 // Escape Kids maps the three OSD action buttons to Run, Super Jump and
@@ -405,12 +225,6 @@ always @(posedge clk) begin
             $error("Escape Kids reserved header byte %0d is non-zero: %02X",prog_addr[1:0],prog_data);
 `endif
     end
-    case( debug_bus[7:6] )
-        0: debug_mux <= st_main;
-        1: debug_mux <= st_video;
-        2: debug_mux <= st_snd;
-        3: debug_mux <= {init,rmrd, 6'd0 };
-    endcase
 end
 
 /* verilator tracing_off */

@@ -95,6 +95,8 @@ reg         parsur;
 reg  [8:0]  esc_hdump, esc_vdump;
 reg         esc_vld_pending;
 
+localparam [8:0] ESC_HLD_PHASE = 9'h043;
+
 // The CCU exposes load pulses rather than the K052109's 9-bit counters.
 // hld/vld are registered by the K053252, so reconstruct the measured native
 // domains from those load events rather than wrapping a cycle before hld.
@@ -102,13 +104,13 @@ reg         esc_vld_pending;
 // line.  This bridge is used only by Escape Kids.
 always @(posedge clk) begin
     if( rst ) begin
-        esc_hdump       <= 9'h020;
+        esc_hdump       <= ESC_HLD_PHASE;
         esc_vdump       <= 9'h0f8;
         esc_vld_pending <= 1'b0;
     end else if( pxl_cen && esckids ) begin
         if( ext_vld ) esc_vld_pending <= 1'b1;
         if( ext_hld ) begin
-            esc_hdump <= 9'h020;
+            esc_hdump <= ESC_HLD_PHASE;
             if( ext_vld | esc_vld_pending )
                 esc_vdump <= 9'h0f8;
             else
@@ -159,7 +161,10 @@ function [7:0] cgate( input [7:0] c);
                    : { c[7:5], 5'd0};
 endfunction
 
-jt052109 u_tilemap(
+jt052109 #(
+    .ROWSCR_START( EXT_TIMING ? 9'h032 : 9'h028 ),
+    .ROWSCR_END  ( EXT_TIMING ? 9'h059 : 9'h04f )
+) u_tilemap(
     .rst        ( rst       ),
     .clk        ( clk       ),
     .pxl_cen    ( pxl_cen   ),

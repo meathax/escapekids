@@ -21,7 +21,7 @@ reg pre_pending;
 
 always #5 clk = ~clk;
 
-jtsimson_scroll dut(
+jtsimson_scroll #(.EXT_TIMING(1)) dut(
     .rst(rst), .clk(clk), .pxl_cen(1'b1), .pxl2_cen(1'b0),
     .paroda(1'b0), .simson(1'b0), .esckids(1'b1), .suratk(1'b0),
     .ext_lhbl(1'b1), .ext_lvbl(1'b1), .ext_hs(1'b0), .ext_vs(1'b0),
@@ -59,7 +59,7 @@ begin
         if (pixels_since_hld != 384)
             $fatal(1, "H interval=%0d expected384 frame=%0d line=%0d", pixels_since_hld, frame, line);
         pixels_since_hld = 0;
-        if (dut.esc_hdump !== 9'h020)
+        if (dut.esc_hdump !== 9'h043)
             $fatal(1, "H reset missed/duplicated got=%03h", dut.esc_hdump);
         if (dut.esc_vld_pending !== 1'b0)
             $fatal(1, "V pending not consumed at H load");
@@ -72,7 +72,7 @@ begin
         if (dut.esc_vdump !== expected_v)
             $fatal(1, "V update mismatch pre=%03h got=%03h expected=%03h", pre_v, dut.esc_vdump, expected_v);
     end else begin
-        if (dut.esc_hdump !== pre_h + 1'b1)
+        if (dut.esc_hdump !== (pre_h == 9'h19f ? 9'h020 : pre_h + 1'b1))
             $fatal(1, "H advanced incorrectly pre=%03h got=%03h", pre_h, dut.esc_hdump);
         if (dut.esc_vdump !== pre_v)
             $fatal(1, "V changed without H load pre=%03h got=%03h", pre_v, dut.esc_vdump);
@@ -90,7 +90,7 @@ endtask
 
 initial begin
     repeat (4) @(posedge clk);
-    if (dut.esc_hdump !== 9'h020 || dut.esc_vdump !== 9'h0f8 || dut.esc_vld_pending !== 1'b0)
+    if (dut.esc_hdump !== 9'h043 || dut.esc_vdump !== 9'h0f8 || dut.esc_vld_pending !== 1'b0)
         $fatal(1, "reset state mismatch");
     @(negedge clk); rst = 0;
     for (frame = 0; frame < 2; frame = frame+1) begin
@@ -110,16 +110,24 @@ initial begin
         pending_set_count != 2 || pending_consume_count != 2)
         $fatal(1, "event totals H=%0d V=%0d set=%0d consume=%0d",
             hld_count, vld_count, pending_set_count, pending_consume_count);
-    if (pixels_since_hld != 0 || dut.esc_hdump !== 9'h020 ||
+    if (pixels_since_hld != 0 || dut.esc_hdump !== 9'h043 ||
         dut.esc_vdump !== 9'h0f8 || dut.esc_vld_pending !== 1'b0)
         $fatal(1, "final bridge state mismatch H=%03h V=%03h pending=%0d px=%0d",
             dut.esc_hdump, dut.esc_vdump, dut.esc_vld_pending, pixels_since_hld);
+    if (dut.u_tilemap.ROWSCR_START !== 9'h032 ||
+        dut.u_tilemap.ROWSCR_END !== 9'h059 ||
+        dut.u_tilemap.ROWSCR_END-dut.u_tilemap.ROWSCR_START !== 9'd39)
+        $fatal(1, "Escape row-scroll window mismatch start=%03h end=%03h",
+            dut.u_tilemap.ROWSCR_START, dut.u_tilemap.ROWSCR_END);
     $display("JTSIMSON_SCROLL_EXT_BRIDGE_RESULT outcome=pass frames=2 pixels_per_line=384 lines_per_frame=264 h_resets=528 v_sets=2 v_consumes=2 duplicates=0 misses=0");
     $finish;
 end
 endmodule
 
-module jt052109(
+module jt052109 #(
+    parameter [8:0] ROWSCR_START=9'h028,
+    parameter [8:0] ROWSCR_END=9'h04f
+)(
     input rst, clk, pxl_cen, pxl2_cen, lvbl, gfx_cs, cpu_we, rmrd,
     input [15:0] cpu_addr, input [7:0] cpu_dout, input hflip_en,
     input [14:0] ioctl_addr, input ioctl_ram, input [7:0] debug_bus,

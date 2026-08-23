@@ -268,7 +268,6 @@ jtsimson_obj #(.RAMW(ORAMW)) u_obj(    // sprite logic
     .simson     ( simson    ),
     .ln_done    (           ),
 `else
-assign obj_shd[1] = 1'b0;
 jtriders_obj #(
     .RAMW         ( ORAMW   ),
     .HFLIP_OFFSET ( 10'd134 ),
@@ -312,7 +311,7 @@ jtriders_obj #(
     .shd        ( obj_shd   ),
 `else
     .rom_addr   ( lyro_addr ),
-    .shd        ( obj_shd[0]),
+    .shd        ( obj_shd   ),
 `endif
     // pixel output
     .pxl        ( lyro_pxl  ),
