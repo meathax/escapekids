@@ -2,6 +2,72 @@
 
 Date: 2026-08-24
 
+## Stutter timing investigation
+
+### Decision record
+
+Observation:
+
+- The supplied MiSTer recording shows a persistent physical-display hitch at
+  approximately 1.228-second intervals. The user independently confirmed that
+  the same hitch is visible on the MiSTer display, so this is not classified as
+  a camera-only artifact.
+
+Evidence:
+
+- MCP video analysis of `D:/Downloads/2026-08-24 20-14-02.mp4` reports a 60 fps,
+  4.25-second capture (`SHA256=eccf5fca88b1c3515586f9409577504aa57f6fc28a38cba66019655fbc520889`).
+  Frame-motion minima occur near 1.117, 2.350, and 3.583 seconds, with a
+  1.233-second measured spacing.
+- The pinned MAME and RTL raster contracts use a 6 MHz pixel clock, 384
+  horizontal clocks, and 264 lines: `6,000,000 / (384*264) = 59.185606 Hz`.
+  The expected 60 Hz beat is `1 / abs(60 - 59.185606) = 1.227907 s`, matching
+  the recorded cadence.
+- The strict native-raster smoke receipt passes 384x264 and 101,376 pixel
+  ticks, and the project RTL contains no once-per-second video timer in this
+  path.
+- `sys/sys_top.v` selects the fixed HDMI PLL when `direct_video` is clear and
+  selects the core video clock when it is set. The former path therefore
+  resamples this native 59.1856 Hz stream into a fixed 60 Hz presentation.
+
+Hypotheses:
+
+- A game/SDRAM deadline stall would not predict the exact 1.2279-second beat;
+  the clean native-raster run falsifies it for this symptom.
+- A capture-only cadence artifact is inconsistent with the user’s direct
+  MiSTer observation.
+- Native 59.1856 Hz presented through fixed 60 Hz timing predicts the observed
+  beat and is selected.
+
+Selected explanation:
+
+- The first causal producer is the presentation clock selection, not the
+  K053252 raster, CPU cadence, audio, or SDRAM path.
+
+Smallest change:
+
+- Define `ESCAPE_KIDS_FORCE_NATIVE_VIDEO` only for the MiSTer QSF and force the
+  existing `sys_top.v` direct/native video clock path. The game’s 6 MHz clock,
+  384x264 raster, CPU, audio, and memory timing are unchanged. The Q13 QSF is
+  intentionally unchanged.
+
+Verification:
+
+- Re-run strict full-core lint and the native-raster smoke; inspect the macro
+  diff and confirm no generated/vendor RTL was changed. A physical MiSTer load
+  is required to validate the direct HDMI mode.
+
+Regression scope:
+
+- MiSTer HDMI/direct-video integration and native raster. Game, ROM, input,
+  audio, and SDRAM regressions remain applicable and are not retimed.
+
+Known unknowns:
+
+- The attached monitor’s acceptance of the core’s native direct HDMI timing is
+  not measurable in this workspace. No fresh RBF or hardware acceptance is
+  claimed until that check is performed.
+
 ## Decision record
 
 Observation:

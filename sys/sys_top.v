@@ -293,7 +293,11 @@ reg        cfg_set      = 0;
 	wire    direct_video = 1;
 `else
 	wire    vga_fb       = cfg[12] | vga_force_scaler;
+	`ifdef ESCAPE_KIDS_FORCE_NATIVE_VIDEO
+		wire    direct_video = 1'b1;
+	`else
 	wire    direct_video = cfg[10];
+	`endif
 `endif
 
 wire       audio_96k    = cfg[6];
