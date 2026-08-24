@@ -568,6 +568,7 @@ module tb_escape_kids_full_smoke;
     integer video_trace_pixel_count;
     integer video_trace_sdram_limit, video_trace_sdram_count;
     integer video_trace_bank2_count, video_bank2_addr_violations;
+    integer video_trace_tile_collision_count;
     reg [2:0] video_bank2_watch;
     reg [2:0] video_bank2_warned;
     reg [21:0] video_bank2_watch_addr [0:2];
@@ -676,6 +677,36 @@ module tb_escape_kids_full_smoke;
             end
         end
     endtask
+
+    // A CPU write and renderer read can hit the same K052109 RAM address on
+    // the same 48 MHz edge. Quartus currently infers DONT_CARE for that
+    // mixed-port case, while the behavioral RAM returns old data. Record the
+    // exact collision without changing either port.
+    always @(posedge clk) begin
+        if (!rst && video_trace_fd != 0 &&
+            frame_ord >= video_trace_first &&
+            frame_ord <= video_trace_last &&
+            (dut.u_game.u_video.u_scroll.u_tilemap.we[1] ||
+             dut.u_game.u_video.u_scroll.u_tilemap.we[2]) &&
+            dut.u_game.u_video.u_scroll.u_tilemap.cpu_addr[12:0] ==
+            dut.u_game.u_video.u_scroll.u_tilemap.vaddr) begin
+            $fwrite(video_trace_fd,
+                "{\"schema\":\"escape-kids-tilemap-collision-v1\",\"seq\":%0d,\"frame\":%0d,\"cycle\":%0d,\"hdump\":\"%0h\",\"vdump\":\"%0h\",\"address\":\"%0h\",\"cpu_data\":\"%0h\",\"we\":\"%0h\",\"scan_before\":\"%0h\",\"vaddr_nx\":\"%0h\",\"map_a\":\"%0h\",\"map_b\":\"%0h\"}\n",
+                video_trace_tile_collision_count, frame_ord,
+                diag_cycle_count,
+                dut.u_game.u_video.u_scroll.hdump,
+                dut.u_game.u_video.u_scroll.vdump,
+                dut.u_game.u_video.u_scroll.u_tilemap.vaddr,
+                dut.u_game.u_video.u_scroll.u_tilemap.cpu_dout,
+                dut.u_game.u_video.u_scroll.u_tilemap.we,
+                dut.u_game.u_video.u_scroll.u_tilemap.scan_dout,
+                dut.u_game.u_video.u_scroll.u_tilemap.vaddr_nx,
+                dut.u_game.u_video.u_scroll.u_tilemap.map_a,
+                dut.u_game.u_video.u_scroll.u_tilemap.map_b);
+            video_trace_tile_collision_count =
+                video_trace_tile_collision_count + 1;
+        end
+    end
 `endif
 
     // Where do the K052109 tilemap writes go?  Sampled on every clock, not
@@ -728,12 +759,25 @@ module tb_escape_kids_full_smoke;
     reg [21:0] pending_addr;
     integer pending_wait;
     integer smoke_bank2_wait;
+    reg smoke_sdram_wrap4;
+    reg pending_started;
+`ifdef ESCAPE_KIDS_REAL_SDRAM_TIMING
+    localparam SMOKE_FORCE_WRAP4 = 1'b1;
+`else
+    localparam SMOKE_FORCE_WRAP4 = 1'b0;
+`endif
+    wire [21:0] pending_read_addr = (SMOKE_FORCE_WRAP4 ||
+                                    (smoke_sdram_wrap4 && pending_bank == 2'd2)) ?
+                                    {pending_addr[21:2], pending_addr[1:0] + pending_phase} :
+                                    pending_addr + pending_phase;
+`ifndef ESCAPE_KIDS_REAL_SDRAM_TIMING
     wire [3:0] request_one = pending_valid ? 4'd0 :
                              ba_rd[0] ? 4'b0001 :
                              ba_rd[1] ? 4'b0010 :
                              ba_rd[2] ? 4'b0100 :
                              ba_rd[3] ? 4'b1000 : 4'd0;
     assign ba_ack = request_one;
+`endif
 
     function [31:0] media_index;
         input [1:0] bank;
@@ -771,10 +815,10 @@ module tb_escape_kids_full_smoke;
                 "{\"schema\":\"escape-kids-video-sdram-v1\",\"seq\":%0d,\"frame\":%0d,\"bank\":\"%0h\",\"address\":\"%0h\",\"phase\":\"%0h\",\"media_index\":\"%0h\",\"data_read\":\"%0h\",\"media_lo\":\"%0h\",\"media_hi\":\"%0h\",\"ba2_addr\":\"%0h\",\"lyra_addr\":\"%0h\",\"lyrb_addr\":\"%0h\",\"lyrf_addr\":\"%0h\",\"lyra_cs\":\"%0h\",\"lyrb_cs\":\"%0h\",\"lyrf_cs\":\"%0h\",\"ba_dst\":\"%0h\",\"ba_rdy\":\"%0h\",\"ba_ack\":\"%0h\"}\n",
                 video_trace_sdram_count, frame_ord, pending_bank,
                 pending_addr, pending_phase,
-                media_index(pending_bank, pending_addr + pending_phase),
+                media_index(pending_bank, pending_read_addr),
                 data_read,
-                media[media_index(pending_bank, pending_addr + pending_phase)],
-                media[media_index(pending_bank, pending_addr + pending_phase) + 1],
+                media[media_index(pending_bank, pending_read_addr)],
+                media[media_index(pending_bank, pending_read_addr) + 1],
                 ba2_addr,
                 dut.u_game.u_video.lyra_addr,
                 dut.u_game.u_video.lyrb_addr,
@@ -1067,13 +1111,14 @@ module tb_escape_kids_full_smoke;
     // DOUBLE=1 path consumes the first beat at DST and the second at RDY;
     // presenting only one beat corrupts every four-byte cache line and makes
     // the CPU appear to execute phantom opcodes.
+`ifndef ESCAPE_KIDS_REAL_SDRAM_TIMING
     assign ba_dst = pending_valid && pending_wait==0 && pending_phase==0 ?
                     (4'b0001 << pending_bank) : 4'b0000;
     assign ba_rdy = pending_valid && pending_wait==0 &&
                     pending_phase==pending_last ?
                     (4'b0001 << pending_bank) : 4'b0000;
     assign ba_dok = ba_rdy;
-    assign data_read = pending_valid ? read_word(pending_bank, pending_addr + pending_phase) : 16'h0000;
+    assign data_read = pending_valid ? read_word(pending_bank, pending_read_addr) : 16'h0000;
 
     always @(posedge clk) begin
         if (pending_valid) begin
@@ -1122,6 +1167,146 @@ module tb_escape_kids_full_smoke;
             loader_writes <= loader_writes + 1;
         end
     end
+`else
+    wire [1:0] smoke_rfsh_cen;
+    wire smoke_sdram_init;
+    wire [15:0] smoke_sdram_dq;
+    wire [15:0] smoke_sdram_din;
+    wire [12:0] smoke_sdram_a;
+    wire [1:0] smoke_sdram_ba;
+    wire smoke_sdram_dqml, smoke_sdram_dqmh;
+    wire smoke_sdram_nwe, smoke_sdram_ncas, smoke_sdram_nras;
+    wire smoke_sdram_ncs, smoke_sdram_cke;
+    integer smoke_real_sdram_diag;
+`ifdef ESCAPE_KIDS_SDRAM_RANDOM_BANK_PRIORITY
+    localparam SMOKE_SDRAM_BAPRIO = 0;
+`else
+    localparam SMOKE_SDRAM_BAPRIO = 1;
+`endif
+
+    assign smoke_sdram_dq = 16'd0;
+    assign data_read = pending_valid ? read_word(pending_bank, pending_read_addr) : 16'h0000;
+
+    jtframe_frac_cen #(.WC(11)) u_smoke_rfsh_cen(
+        .clk  ( clk             ),
+        .n    ( 11'd1           ),
+        .m    ( 11'd1536        ),
+        .cen  ( smoke_rfsh_cen  ),
+        .cenb (                 )
+    );
+
+    jtframe_sdram64 #(
+        .AW        ( 22                  ),
+        .HF        ( 0                   ),
+        .SHIFTED   ( 1                   ),
+        .BA0_LEN   ( `JTFRAME_BA0_LEN    ),
+        .BA1_LEN   ( 32                  ),
+        .BA2_LEN   ( `JTFRAME_BA2_LEN    ),
+        .BA3_LEN   ( 32                  ),
+        .PROG_LEN  ( 32                  ),
+        .BAPRIO    ( SMOKE_SDRAM_BAPRIO  )
+    ) u_smoke_sdram(
+        .rst        ( rst                ),
+        .clk        ( clk                ),
+        .init       ( smoke_sdram_init   ),
+        .ba0_addr   ( ba0_addr           ),
+        .ba1_addr   ( ba1_addr           ),
+        .ba2_addr   ( ba2_addr           ),
+        .ba3_addr   ( ba3_addr           ),
+        .rd         ( ba_rd              ),
+        .wr         ( ba_wr              ),
+        .ba0_din    ( ba0_din            ),
+        .ba0_dsn    ( ba0_dsn            ),
+        .ba1_din    ( ba1_din            ),
+        .ba1_dsn    ( ba1_dsn            ),
+        .ba2_din    ( ba2_din            ),
+        .ba2_dsn    ( ba2_dsn            ),
+        .ba3_din    ( ba3_din            ),
+        .ba3_dsn    ( ba3_dsn            ),
+        .prog_en    ( 1'b0               ),
+        .prog_addr  ( 22'd0              ),
+        .prog_rd    ( 1'b0               ),
+        .prog_wr    ( 1'b0               ),
+        .prog_din   ( 16'd0              ),
+        .prog_dsn   ( 2'b11              ),
+        .prog_ba    ( 2'd0               ),
+        .prog_dst   (                     ),
+        .prog_dok   (                     ),
+        .prog_rdy   (                     ),
+        .prog_ack   (                     ),
+        .rfsh       ( smoke_rfsh_cen[0]  ),
+        .ack        ( ba_ack             ),
+        .dst        ( ba_dst             ),
+        .dok        ( ba_dok             ),
+        .rdy        ( ba_rdy             ),
+        .dout       (                     ),
+        .sdram_dq   ( smoke_sdram_dq     ),
+        .sdram_din  ( smoke_sdram_din    ),
+        .sdram_a    ( smoke_sdram_a      ),
+        .sdram_dqml ( smoke_sdram_dqml   ),
+        .sdram_dqmh ( smoke_sdram_dqmh   ),
+        .sdram_nwe  ( smoke_sdram_nwe    ),
+        .sdram_ncas ( smoke_sdram_ncas   ),
+        .sdram_nras ( smoke_sdram_nras   ),
+        .sdram_ncs  ( smoke_sdram_ncs    ),
+        .sdram_ba   ( smoke_sdram_ba     ),
+        .sdram_cke  ( smoke_sdram_cke    )
+    );
+
+    always @(posedge clk) begin
+        if (prog_we) begin
+            if (!prog_mask[0]) media[media_index(prog_ba, prog_addr)] <= prog_data[7:0];
+            if (!prog_mask[1]) media[media_index(prog_ba, prog_addr) + 1] <= prog_data[15:8];
+            loader_writes <= loader_writes + 1;
+        end
+        if (rst) begin
+            pending_valid   <= 1'b0;
+            pending_started <= 1'b0;
+            pending_phase   <= 2'd0;
+            pending_last    <= 2'd1;
+            pending_bank    <= 2'd0;
+            pending_addr    <= 22'd0;
+        end else begin
+            if (|ba_rdy) begin
+                pending_valid   <= 1'b0;
+                pending_started <= 1'b0;
+                rom_reads <= rom_reads + 1;
+            end
+            if (|ba_ack) begin
+                pending_valid   <= 1'b1;
+                pending_started <= 1'b0;
+                pending_phase   <= 2'd0;
+                casez (ba_ack)
+                    4'b???1: begin pending_bank <= 2'd0; pending_addr <= ba0_addr; pending_last <= 2'd1; end
+                    4'b??10: begin pending_bank <= 2'd1; pending_addr <= ba1_addr; pending_last <= 2'd1; end
+                    4'b?100: begin pending_bank <= 2'd2; pending_addr <= ba2_addr; pending_last <= SMOKE_BA2_LAST; end
+                    4'b1000: begin pending_bank <= 2'd3; pending_addr <= ba3_addr; pending_last <= 2'd1; end
+                    default: ;
+                endcase
+            end
+            if (|ba_dst) begin
+                pending_started <= 1'b1;
+                pending_phase <= 2'd1;
+            end else if (pending_started && !(|ba_rdy)) begin
+                pending_phase <= pending_phase + 1'b1;
+            end
+        end
+    end
+
+    always @(posedge clk) begin
+        if (rst) begin
+            smoke_real_sdram_diag <= 0;
+        end else if (smoke_real_sdram_diag < 256 &&
+                     (|ba_ack || |ba_dst || |ba_rdy)) begin
+            $display("REAL-SDRAM-DIAG n=%0d ack=%h dst=%h rdy=%h bank=%0d base=%h phase=%0d read=%h ba0=%h ba1=%h ba2=%h ba3=%h main_addr=%h main_data=%h main_ok=%b",
+                smoke_real_sdram_diag, ba_ack, ba_dst, ba_rdy,
+                pending_bank, pending_addr, pending_phase, data_read,
+                ba0_addr, ba1_addr, ba2_addr, ba3_addr,
+                dut.main_addr, dut.main_data, dut.main_ok);
+            smoke_real_sdram_diag <= smoke_real_sdram_diag + 1;
+        end
+    end
+`endif
 
     always #5  clk   = ~clk;
     always #10 clk24 = ~clk24;
@@ -1129,8 +1314,19 @@ module tb_escape_kids_full_smoke;
     always #2  clk96 = ~clk96;
 
     jtsimson_game_sdram dut (
+`ifdef ESCAPE_KIDS_REAL_SDRAM_TIMING
+        .rst(rst | smoke_sdram_init),
+        .clk(clk),
+        .rst24(rst24 | smoke_sdram_init),
+        .clk24(clk24),
+        .rst48(rst48 | smoke_sdram_init),
+        .clk48(clk48),
+        .rst96(rst96 | smoke_sdram_init),
+        .clk96(clk96),
+`else
         .rst(rst), .clk(clk), .rst24(rst24), .clk24(clk24),
         .rst48(rst48), .clk48(clk48), .rst96(rst96), .clk96(clk96),
+`endif
         .pxl2_cen(pxl2_cen), .pxl_cen(pxl_cen),
         .red(red), .green(green), .blue(blue), .LHBL(LHBL), .LVBL(LVBL),
         .HS(HS), .VS(VS), .cab_1p(cab_1p), .coin(coin),
@@ -2447,9 +2643,11 @@ module tb_escape_kids_full_smoke;
         pending_last = 2'd1;
         pending_bank = 2'd0;
         pending_addr = 22'd0;
+        pending_started = 1'b0;
         pending_wait = 0;
         if (!$value$plusargs("SMOKE_BANK2_WAIT=%d", smoke_bank2_wait))
             smoke_bank2_wait = 0;
+        smoke_sdram_wrap4 = $test$plusargs("SMOKE_SDRAM_WRAP4");
         trace_file = "";
         trace_fd = 0;
         trace_seq = 0;
@@ -2593,6 +2791,7 @@ module tb_escape_kids_full_smoke;
         video_trace_sdram_limit = 200000;
         video_trace_sdram_count = 0;
         video_trace_bank2_count = 0;
+        video_trace_tile_collision_count = 0;
         video_bank2_addr_violations = 0;
         video_bank2_watch = 3'b000;
         video_bank2_warned = 3'b000;
