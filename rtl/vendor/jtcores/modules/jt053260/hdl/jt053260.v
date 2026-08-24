@@ -58,7 +58,8 @@ module jt053260(
     output reg signed [15:0] snd_r,
     output                   sample, tim2,
     // debug
-    input             [ 4:0] ch_en
+    input             [ 4:0] ch_en,
+    input             [ 3:0] ch_mute
     // unsupported pins
     // input               st1,
     // input               st2,
@@ -83,6 +84,17 @@ reg    [ 2:0] ch0_pan, ch1_pan, ch2_pan, ch3_pan;
 wire          ch0_sample, ch1_sample, ch2_sample, ch3_sample, tim2_enb;
 wire signed [15:0] ch0_snd_l, ch1_snd_l, ch2_snd_l, ch3_snd_l,
                    ch0_snd_r, ch1_snd_r, ch2_snd_r, ch3_snd_r;
+wire signed [15:0] mix_ch0_l, mix_ch1_l, mix_ch2_l, mix_ch3_l,
+                   mix_ch0_r, mix_ch1_r, mix_ch2_r, mix_ch3_r;
+
+assign mix_ch0_l = ch_mute[0] ? 16'sd0 : ch0_snd_l;
+assign mix_ch1_l = ch_mute[1] ? 16'sd0 : ch1_snd_l;
+assign mix_ch2_l = ch_mute[2] ? 16'sd0 : ch2_snd_l;
+assign mix_ch3_l = ch_mute[3] ? 16'sd0 : ch3_snd_l;
+assign mix_ch0_r = ch_mute[0] ? 16'sd0 : ch0_snd_r;
+assign mix_ch1_r = ch_mute[1] ? 16'sd0 : ch1_snd_r;
+assign mix_ch2_r = ch_mute[2] ? 16'sd0 : ch2_snd_r;
+assign mix_ch3_r = ch_mute[3] ? 16'sd0 : ch3_snd_r;
 
 reg    [ 6:0] pan0_l, pan0_r, pan1_l, pan1_r,
               pan2_l, pan2_r, pan3_l, pan3_r;
@@ -119,7 +131,7 @@ jtframe_limsum u_suml(
     .rst    ( rst       ),
     .clk    ( clk       ),
     .cen    ( cen       ),
-    .parts  ( {aux_l, ch3_snd_l, ch2_snd_l, ch1_snd_l, ch0_snd_l} ),
+    .parts  ( {aux_l, mix_ch3_l, mix_ch2_l, mix_ch1_l, mix_ch0_l} ),
     .en     ( left_en   ),
     .sum    ( pre_l     ),
     .peak   ( peak_l    )
@@ -129,7 +141,7 @@ jtframe_limsum u_sumr(
     .rst    ( rst       ),
     .clk    ( clk       ),
     .cen    ( cen       ),
-    .parts  ( {aux_r, ch3_snd_r, ch2_snd_r, ch1_snd_r, ch0_snd_r} ),
+    .parts  ( {aux_r, mix_ch3_r, mix_ch2_r, mix_ch1_r, mix_ch0_r} ),
     .en     ( right_en  ),
     .sum    ( pre_r     ),
     .peak   ( peak_r    )

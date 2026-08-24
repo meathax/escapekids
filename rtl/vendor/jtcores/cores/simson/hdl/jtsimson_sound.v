@@ -67,11 +67,19 @@ module jtsimson_sound(
     // Debug
     input    [ 7:0] debug_bus,
     input    [ 5:0] snd_en,
+    input           mute_one_two,
     output   [ 7:0] st_dout
 );
 `ifndef NOSOUND
 wire signed [15:0]  fm_l, fm_r, mix_l, mix_r;
 wire        [ 7:0]  cpu_dout, ram_dout, st_pcm, pcm_dout, mux_fmdin;
+localparam [20:0] ONE_TWO_START = 21'h004871;
+wire        [ 3:0] pcm_mute;
+assign pcm_mute = {4{mute_one_two}} &
+                  { pcmd_start == ONE_TWO_START,
+                    pcmc_start == ONE_TWO_START,
+                    pcmb_start == ONE_TWO_START,
+                    pcma_start == ONE_TWO_START };
 wire        [15:0]  A;
 reg         [ 7:0]  cpu_din;
 wire                mreq_n, rd_n, wr_n, rfsh_n,
@@ -249,6 +257,7 @@ jt053260 u_pcm(
     // .romd_ok    ( pcmd_ok   ),
     // sound output - raw
     .ch_en      (snd_en[5:1]),
+    .ch_mute    ( pcm_mute  ),
     .aux_l      ( fm_l      ),
     .aux_r      ( fm_r      ),
     .snd_l      ( mix_l     ),

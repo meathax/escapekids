@@ -27,6 +27,7 @@ wire        pal_we, pal_bank, fm_irqn,
             cpu_we, tilesys_cs, objsys_cs, pcu_cs, objcha_n;
 wire        cpu_rnw, cpu_irqn, cpu_firqn, cpu_nmin, dma_bsy, snd_wrn, mono, objreg_cs, main_fmcs;
 wire        video_bank, k053252_cs;
+wire        mute_one_two;
 wire [ 7:0] k053252_dout;
 wire [ 7:0] tilesys_dout, objsys_dout,
             obj_dout, pal_dout, cpu_dout,
@@ -78,6 +79,7 @@ assign debug_view = 8'd0;
 assign ram_din    = cpu_dout;
 assign ioctl_din  = video_dump;
 assign video_dumpa= ioctl_addr[15:0]-16'h80;
+assign mute_one_two = esckids && status[11];
 assign red        = core_red;
 assign green      = core_green;
 assign blue       = core_blue;
@@ -392,6 +394,7 @@ jtsimson_sound u_sound(
     .snd_r      ( snd_r         ),
     // Debug
     .snd_en     ( snd_en        ),
+    .mute_one_two( mute_one_two ),
     .debug_bus  ( debug_bus     ),
     .st_dout    ( st_snd        )
 );
