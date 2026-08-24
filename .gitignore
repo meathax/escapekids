@@ -1,14 +1,15 @@
-db
-greybox_tmp
-incremental_db
-output_files
-simulation
-hc_output
-scaler
-hps_isw_handoff
-vip
-*_sim
-.qsys_edit
+# Quartus and FPGA build products (MiSTer Template_MiSTer baseline).
+db/
+greybox_tmp/
+incremental_db/
+output_files/
+simulation/
+hc_output/
+scaler/
+hps_isw_handoff/
+vip/
+*_sim/
+.qsys_edit/
 PLLJ_PLLSPE_INFO.txt
 *.bak
 *.orig
@@ -35,61 +36,53 @@ c5_pin_model_dump.txt
 *.bsf
 *~
 *.xml
-*_netlist
 *.cdf
 **/.DS_Store
 
-# Supplied copyrighted ROM archive and local extracted images.
-roms/*.zip
-roms/**/*.zip
-roms/**/*.bin
-roms/**/*.nv
-
-# Local MAME runtime state/captures.
-cfg/
-!/cfg/
-/cfg/*
-!/cfg/macros.def
-!/cfg/mem.yaml
-!/cfg/mame2mra.toml
+# Generated or local-only media and simulation products.
+roms/
 nvram/
-snap/
-sta/
+*.zip
+*.bin
+*.raw
+*.vcd
+*.fst
+*.vvp
+*.exe
+*.obj
+*.o
+*.d
+*.log
+*.png
+*.jpg
+*.jpeg
+*.webm
+*.mp4
+NUL
 
-# MiSTer/Quartus generated bitstreams -- only the curated releases/ RBF ships.
-*.rbf
-!/releases/*.rbf
-!/releases/**/*.rbf
-
-# Secondary/experimental Quartus project variant -- not part of the public core.
-EscapeKids_Q13.*
-
-# Simulation runtime dumps and one-off captures left in the repo root.
-cfgstr.hex
-jt51.raw
-jt51_cmd.txt
-obj.bin
-pal.bin
-scr0.bin
-scr1.bin
-ccu_writes.log
-eeprom_ioport_dump.txt
-jtag.cdf
-
-# Disposable focused simulation outputs.
-.mister/*.vvp
-.mister/*.exe
-.mister/__pycache__/
-.mister/mame/
-.mister/mra-media/
-
-# AI-assisted development session material: differential-debug evidence,
-# hardware-evidence PDFs/video, MAME MCP scripts/logs, agent scratch state.
-# None of this is part of the publishable core (matches the SVV/S32MULTIONLY
-# template repos) -- keep it local only, never push it.
+# Local AI, verification, diagnostic and capture material.
 .mister/
 .mame_mcp/
 .mame_mcp_vrender/
 .codex-mister-build/
+.codex/
+.agents/
+.claude/
+cfg/
 docs/
-reference/
+screenshots/
+sta/
+tools/
+NOTES.md
+handover.md
+rtl/esckids/verify/
+rtl/vendor/jtcores/cores/*/doc/
+rtl/vendor/jtcores/modules/*/doc/
+rtl/vendor/jtcores/modules/*/ver/
+rtl/vendor/jtcores/modules/jtframe/hdl/ver/*
+!rtl/vendor/jtcores/modules/jtframe/hdl/ver/jtframe_romrq_rdy_check.v
+
+# RBFs are release artifacts; explicitly allow only the current public RBF.
+*.rbf
+!/releases/
+!/releases/Arcade-EscapeKids_20260824.rbf

@@ -1,69 +1,91 @@
-# Escape Kids MiSTer Core
+# Escape Kids — MiSTer FPGA Core
 
-MiSTer FPGA implementation of Konami's *Escape Kids* arcade hardware for the DE10-nano / MiSTer FPGA platform. The core uses the MiSTer framework and requires the standard SDRAM-equipped setup.
+An FPGA recreation of Konami's 1991 *Escape Kids* arcade hardware for the MiSTer DE10-Nano platform. The core targets a standard MiSTer setup with an SDRAM expansion and a 15 kHz-class horizontal arcade display.
+
+## Compatibility
+
+| MAME set | Game | Region | Players | MRA |
+| --- | --- | --- | --- | --- |
+| `esckids` | Escape Kids | Asia | 4 | `Escape Kids (Asia, 4 Players).mra` |
+| `esckidsj` | Escape Kids | Japan | 2 | `Escape Kids (Japan, 2 Players).mra` |
+
+Both MRAs use the same `Arcade-EscapeKids` core and select the cabinet/profile data through the ROM-loader header.
 
 ## Features in the OSD
 
-- Asia, 4-player and Japan, 2-player game sets
-- Standard MiSTer video, audio, reset and ROM loading controls
-- Player controls named **Run**, **Super Jump**, and **Auto Run**
-- **Auto Run** repeatedly taps Run while held, reducing repeated button presses
+- Run, Super Jump and Auto Run action buttons
 - Start, Coin, Service and Test controls
-- Game-written high scores persist through the 128-byte ER5911 NVRAM image
-- ROM downloads use JTFRAME's DDR3 burst staging path before reset release
+- Native horizontal arcade video and MiSTer video options
+- Stereo audio
+- Persistent 128-byte ER5911-compatible NVRAM for game high scores
 
-## PCB Accuracy
+## Hardware model
+
+| Hardware | Core implementation |
+| --- | --- |
+| Konami GX975 main board | JTCORES Konami CPU and Escape Kids address/map wrapper |
+| K052109 / K051962 | Three-layer tilemap and tile-fetch video path |
+| K053246-style sprite path | GX975 sprite DMA, object buffering, zoom, priority and shadow handling |
+| K053251 / K053252 | Palette priority, raster timing, blanking and native 384 × 264 timing |
+| Z80, YM2151 and K053260 | JTCORES sound devices with the Escape Kids PCM prefetch path |
+| ER5911 | Serial EEPROM model with MiSTer NVRAM persistence |
+| MiSTer platform | Standard `sys/` framework, HPS loader, SDRAM/DDR staging, video, audio and OSD glue |
+
+## PCB accuracy
+
+The implementation follows the original program-ROM map and register programming, established JTCORES device implementations, and the Konami/Vendetta MAME driver as a behavioral reference. The following areas have an explicit source or device basis:
 
 | Area | Evidence basis |
 | --- | --- |
-| Konami CPU/device address map | Pinned Escape/Vendetta MAME driver and original program-ROM decode |
-| K053252 raster totals | Original boot register writes and independent K053252 RTL/MAME totals: 384 × 264 |
-| ER5911 serial EEPROM command framing and persistence | ER5911 device documentation, the pinned MAME `EEPROM_ER5911_8BIT` model, and the 128-byte MiSTer NVRAM contract |
+| CPU and device address map | Original Escape Kids program-ROM behavior and the pinned Konami/Vendetta MAME map |
+| K053252 raster | Original boot register writes and the independent K053252 timing implementation |
+| ER5911 serial storage | ER5911 device behavior, the MAME EEPROM model and the MiSTer 128-byte NVRAM contract |
+| GX975 video path | JTCORES' related Konami video devices and Escape Kids-specific register, banking and sprite integration |
 
-Areas without qualifying board measurements are not claimed here. Native hardware display, audio, and control validation remains a separate release gate.
+Claims about analog output, SDRAM margin and physical PCB timing require validation on the target hardware and are not inferred from a compiled bitstream alone.
 
-## Supported games
+## ROMs and MRAs
 
-- Escape Kids (Asia, 4 Players)
-- Escape Kids (Japan, 2 Players)
+Arcade ROM images are not included. Supply legally obtained MAME ROM archives matching the set names above. The MRAs describe the ROM interleaving, profile header and persistent NVRAM image used by the core.
 
-## Hardware emulated
+For a manual installation, copy:
 
-| Hardware | Implementation / reference |
-| --- | --- |
-| Konami main CPU | JTCORES Konami CPU donor, Escape program map |
-| K052109/K051962 tile/video logic | JTCORES video implementation |
-| K053251/K053252 timing and priority | JTCORES devices, Escape register programming |
-| Z80, YM2151 and K053260 audio | JTCORES sound devices with Escape PCM prefetch wrapper |
-| ER5911 serial EEPROM | `jt5911` donor plus generated 128×8 NVRAM path; MRA index 2 is persistent storage for game high scores |
-| MiSTer HPS, DDR3/SDRAM, video and OSD | MiSTer template framework; `JTFRAME_MR_DDRLOAD` stages ROM downloads in 1 KiB DDR3 bursts |
+- `releases/Arcade-EscapeKids_20260824.rbf` to `/media/fat/_Arcade/cores/`
+- both `.mra` files from `releases/` to `/media/fat/_Arcade/`
 
-## Credits
+The repository contains source, framework files, release metadata and the single latest RBF only. Quartus databases, simulation output, captures, ROM archives and other local build products are excluded.
 
-- [JTCORES](https://github.com/jotego/jtcores) and Jotego contributors for the reusable arcade RTL, under its retained GPL-3.0-or-later notices.
-- [MiSTer-devel Template_MiSTer](https://github.com/MiSTer-devel/Template_MiSTer) for the platform framework.
+## Building from source
+
+The project follows the standard MiSTer core layout from [MiSTer-devel/Template_MiSTer](https://github.com/MiSTer-devel/Template_MiSTer). The pinned build target is Quartus Prime 17.0.2 Build 602 for the DE10-Nano Cyclone V `5CSEBA6U23`.
+
+The main project is `EscapeKids.qpf`; `EscapeKids.qsf`, `EscapeKids.sdc`, `EscapeKids.sv`, `files.qip`, `rtl/` and `sys/` contain the project and source closure. `cfgstr.hex` and `font0.hex` are runtime assets required by the MiSTer framework and are intentionally tracked. Generated Quartus output belongs in the ignored build directories.
+
+## Releases
+
+The current public release is:
+
+```text
+releases/Arcade-EscapeKids_20260824.rbf
+SHA-256: 0DAF231D05FCB300A53D4F8E8A1B9DD6D35E0E5801AE4C25E5768ADCA6BF541A
+```
+
+The RBF is compressed for MiSTer HPS configuration. Keep only the newest dated RBF in the root of `releases/`; the MRAs remain alongside it.
+
+## Credits and license
+
+- [JTCORES](https://github.com/jotego/jtcores) and its contributors for the reusable arcade RTL and MiSTer framework components.
+- [MiSTer-devel/Template_MiSTer](https://github.com/MiSTer-devel/Template_MiSTer) for the standard project layout and platform framework.
 - The MAME project and its Konami/Vendetta driver for reference behavior and ROM mappings.
-- Escape Kids original ROM data is not included; users must provide legally obtained ROMs.
+- The Escape Kids ROMs remain the property of their respective owners and are not distributed here.
 
-## License
+Project-specific source is released under GPL-3.0-or-later. Vendored JTCORES and framework components retain their upstream copyright and license notices; see [LICENSE](LICENSE) and [JTCORES-LICENSE](rtl/vendor/jtcores/JTCORES-LICENSE).
 
-Project-specific source is released under GPL-3.0-or-later. Vendored JTCORES and MiSTer framework files retain their upstream copyright and license notices. See [LICENSE](LICENSE).
+## MiSTer Downloader
 
-## How to install
-
-Copy the RBF and both MRA files from `releases/` to `/media/fat/_Arcade/` on the MiSTer SD card (or the equivalent MiSTer release folder). Place the legally obtained Escape Kids ROM ZIPs in the location expected by the MRA files.
-
-For automatic installation, add this entry to `downloader.ini`:
+Add this section to `/media/fat/downloader.ini`, then run **Update All**:
 
 ```ini
 [meathax/meatcores]
-db_url = https://raw.githubusercontent.com/meathax/meatcores/db/downloader_meathax_meatcores.zip
+db_url = https://raw.githubusercontent.com/meathax/meatcores/db/db.json.zip
 ```
-
-Then run **Update All** on MiSTer.
-
-## Development
-
-Production RTL is under `rtl/`; the MiSTer framework is under `sys/`; release MRAs and accepted RBF artifacts are under `releases/`. Build and verification metadata is intentionally kept out of the public source package.
-
-README structure follows the [meathax/s32](https://github.com/meathax/s32) core documentation pattern.
