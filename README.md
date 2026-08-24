@@ -6,7 +6,6 @@ MiSTer FPGA implementation of Konami's *Escape Kids* arcade hardware for the DE1
 
 - Asia, 4-player and Japan, 2-player game sets
 - Standard MiSTer video, audio, reset and ROM loading controls
-- **Mute One-Two Voice**: Off by default; switch it On to mute the repeating gameplay voice effect
 - Player controls named **Run**, **Super Jump**, and **Auto Run**
 - **Auto Run** repeatedly taps Run while held, reducing repeated button presses
 - Start, Coin, Service and Test controls
