@@ -243,3 +243,147 @@ Known unknowns:
 - Exact affected coordinate, MAME/RTL scroll-phase mapping, and whether the
   far-right band is the same internal producer remain unresolved. No RBF or
   hardware claim is made.
+
+## 2026-08-24 tile-strip differential investigation — causal fix
+
+Observation:
+
+- **KNOWN:** the authenticated frame-400 baseline has zero bank-2 address
+  changes and zero tile-ROM word mismatches across 9,840 sampled row loads per
+  layer. Adding only a deterministic 20-clock bank-2 response delay produces
+  ten stale layer-B row loads and the reported sparse 8x1 strips.
+
+Evidence:
+
+- **KNOWN:** the first stale load is screen `(144,100)`, sorted tile-word
+  address `0x3bbfc`: authenticated ROM data is `0x00ffffff`, while K051962
+  samples the previous cache value `0xffffffff`.
+- **KNOWN:** fixed-priority bank-2 service is F, A, then B. `jt051962` samples
+  each layer word unconditionally when its 3-bit horizontal subcounter is
+  zero, so a late B response becomes exactly one stale 32-bit/8-pixel row.
+- **KNOWN:** the current configuration requests only a 32-bit bank-2 burst.
+  The K051962 source contract states that the three-layer SDRAM budget depends
+  on vertically ordered data and 64-bit reads.
+- **KNOWN:** pinned MAME frame `snap/esckids/0067.png` renders the equivalent
+  blue-gradient/card phase without the strips.
+
+Hypotheses:
+
+1. Missing 64-bit bank-2 prefetch causes B-layer deadline misses.
+2. Address instability, tile-code/fine-Y decode, or download interleave is
+   wrong. The clean trace falsifies these: every sampled normal-latency word
+   equals the authenticated stream and no outstanding address changes.
+
+Selected explanation:
+
+- **INFERRED:** bank 2 is under-burst for the three-layer fixed pixel deadline.
+  The first causal producer is the missing `JTFRAME_BA2_LEN=64` build contract,
+  not tilemap contents, address math, palette, or output cropping.
+
+Smallest change:
+
+- Add `JTFRAME_BA2_LEN 64` in `rtl/esckids/jtframe_macros.vh`. No clocks,
+  resets, CDC, counters, tile address bits, palette state, or SDC change.
+
+Verification:
+
+- Rebuild and replay the identical frame-400 wait-20 scenario. Require the old
+  `(B,144,100,0x3bbfc)` fingerprint absent, zero F/A/B ROM-word mismatches, and
+  the clean frame hash restored. Then run current paired MAME/Verilator
+  comparison, cold normal-latency replay, Asia/Japan regressions and lint.
+
+Regression scope:
+
+- Escape Kids Asia/Japan, K052109/K051962 tile layers, all SDRAM logical banks
+  because the controller's physical burst mode is global.
+
+Known unknowns:
+
+- Twenty clocks is a bounded contention model, not a measured constant for
+  every MiSTer transaction. Physical closure still requires a fresh RBF and
+  hardware capture; no RBF is built in this iteration.
+
+## 2026-08-24 tile-strip causal fix - closure amendment
+
+This amendment supersedes the entire provisional causal-fix section above.
+
+Observation:
+
+- **KNOWN:** a deterministic 20-clock bank-2 response delay applied to the
+  original 32-bit burst produces ten stale layer-B row loads and the reported
+  sparse 8x1 strips. Enabling 64-bit doubling for F/A/B closes B but creates
+  240 stale F loads, one per active line, reproducing the thin right-edge band.
+
+Evidence:
+
+- **KNOWN:** the first pre-fix stale load is screen `(144,100)`, sorted
+  tile-word address `0x3bbfc`: authenticated ROM data is `0x00ffffff`, while
+  K051962 samples stale `0xffffffff`. The trace SHA256 is
+  `ADE56350AA9572486A766DBD93C83E1AD4EEB56C4A4BF46BB06F2A6767BD356F`.
+- **KNOWN:** the affected K052109 entry matches MAME and RTL: index `0x15e0`,
+  code `0x70`, attribute `0x1f`. Normal-latency addresses and returned words
+  match the authenticated tile stream, falsifying tile RAM, attribute decode,
+  ROM ordering, and address math.
+- **KNOWN:** K051962 samples each F/A/B word on a fixed pixel deadline. Its
+  source contract requires vertically ordered data and 64-bit reads for the
+  three-layer SDRAM budget. Current clean MAME captures are independently
+  deterministic with normalized trace SHA256
+  `B5963E1ECC419017851D1AD4C7970BB915177B36A63D2BA0FB1DE03B381DEAB1`.
+
+Hypotheses:
+
+1. Missing A/B 64-bit bank-2 prefetch causes B-layer deadline misses.
+2. Address instability, decode, interleave, or palette state is wrong; the
+   authenticated normal-latency trace and matched tile entry falsify these.
+3. F/A/B should all double; the controlled all-double replay falsifies this by
+   moving the causal miss to F and producing the right-edge band.
+
+Selected explanation:
+
+- **INFERRED:** the first causal producer is the missing selective 64-bit
+  cache-fill contract. Vertically adjacent A/B rows must double; fixed F must
+  remain single-row. This is not a tilemap, palette, crop, coordinate, or
+  output-stage fault.
+
+Smallest change:
+
+- Define `JTFRAME_BA2_LEN 64` and `JTFRAME_BA2_SLOT0_NODOUBLE` for Escape Kids.
+  Guard slot-0 doubling in the game SDRAM integration and source template;
+  retain slot-1/slot-2 doubling. Physical bank-2 transfer width changes from
+  32 to 64 bits, A/B gain the adjacent row, and F remains one row. No arithmetic
+  width/signedness, clocks, enables, resets, CDC, counters, tile addresses,
+  palette state, latency registers, pin settings, or SDC changes.
+
+Verification:
+
+- **PASS:** two clean frame-400 wait-20 replays are bit-deterministic: trace
+  SHA256 `D5AF7623029D237DB7832CD759CED0096B196666C61B3860822CAE14A3148706`
+  and frame SHA256
+  `F0076E20714CC72B8214140D3226FAB2DAE2F91FE1AEE729D152E9632EC2A226`.
+  F/A/B each have 0 mismatches across 9,840 row loads, pre-grant address
+  changes are zero, both old visual fingerprints are absent, and the matching
+  prefix advances from B ordinal 4,118 to the frame-401 stop barrier.
+- **PASS:** `.mister/comparators/esckids-tile-strip-deadline-final.json` is the
+  paired MAME/Verilator comparator receipt and every check is true. Permanent
+  regression assets are `rtl/esckids/verify/esckids_tile_strip_deadline.json`
+  and `rtl/esckids/verify/compare_tile_strip_deadline.py`.
+- **PASS:** authenticated Asia and Japan full-top CPU/sound smokes both return
+  `cpu_sound_selftest_pass`. Strict top lint exits zero with zero errors and
+  1,424 warning records. The saved baseline has 1,396 records; no warning is
+  emitted on the new directives/guards, but the +28 delta is preserved rather
+  than claimed warning-neutral.
+
+Regression scope:
+
+- Escape Kids Asia/Japan, K052109/K051962 F/A/B tile layers, shared bank-2
+  integration/template, authenticated ROM mapping, CPU/sound boot, deterministic
+  full-frame capture, and strict top lint. No other bank width or platform
+  target is changed.
+
+Known unknowns:
+
+- The 20-clock wait is a bounded contention experiment, not a measured MiSTer
+  constant. Exact PCB ROM arbitration and physical SDRAM margin remain
+  unmeasured. They do not invalidate closure of the reproduced first
+  divergence. A fresh compressed Quartus RBF was produced on 2026-08-24;
+  hardware video check remains required before claiming hardware validation.

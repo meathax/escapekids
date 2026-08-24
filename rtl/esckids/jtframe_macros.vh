@@ -26,6 +26,10 @@
 `define JTFRAME_BA0_LEN 32
 `define PCM_START 26'h0A0000
 `define JTFRAME_BA2_START 26'h1E0000
+// Fetch two vertically adjacent 32-bit tile rows per bank-2 transaction so
+// all three K052109 layers meet the K051962's fixed pixel-load deadline.
+`define JTFRAME_BA2_LEN 64
+`define JTFRAME_BA2_SLOT0_NODOUBLE
 `define JTFRAME_BA3_START 26'h2E0000
 `define JTFRAME_PROM_START 26'h6E0000
 `define JTFRAME_IOCTL_RD 128

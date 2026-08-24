@@ -486,7 +486,9 @@ jtframe_rom_3slots #(
     .SLOT2_AW(19),
     .SLOT2_DW(32)
 `ifdef JTFRAME_BA2_LEN
+`ifndef JTFRAME_BA2_SLOT0_NODOUBLE
     ,.SLOT0_DOUBLE(1)
+`endif
     ,.SLOT1_DOUBLE(1)
     ,.SLOT2_DOUBLE(1)
 `endif

@@ -7,6 +7,18 @@
 derive_pll_clocks
 derive_clock_uncertainty
 
+# JOY_CLK is JCLOCKS[3] in the active DB15 divider: 48 MHz / 16 = 3 MHz.
+# Target the fitted register as a keeper; a bare register name is not a pin.
+set joy_db15_source [get_pins {emu|u_jtframe|pll|u_pll|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}]
+set joy_db15_target [get_keepers {emu:emu|escape_kids_jtframe_emu:u_jtframe|jtframe_mister:u_frame|jtframe_joymux:u_joymux|joy_db15:u_db15|JCLOCKS[3]}]
+if { [get_collection_size $joy_db15_source] != 1 } {
+    error "Expected exactly one JTFRAME DB15 serializer source clock pin"
+}
+if { [get_collection_size $joy_db15_target] != 1 } {
+    error "Expected exactly one JTFRAME DB15 serializer JCLOCKS[3] keeper"
+}
+create_generated_clock -name joy_db15_clk -source $joy_db15_source -divide_by 16 $joy_db15_target
+
 set_clock_groups -exclusive \
     -group [get_clocks {emu|u_jtframe|pll|u_pll|*PLL_OUTPUT_COUNTER|divclk}] \
     -group [get_clocks {pll_hdmi|pll_hdmi_inst|altera_pll_i|cyclonev_pll|counter*output_counter|divclk}] \

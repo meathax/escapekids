@@ -562,6 +562,16 @@ module tb_escape_kids_full_smoke;
     integer tile_cpu_wr, tile_ram_we, tile_gfxcs_wr, pal_cpu_wr;
 
 `ifdef VERILATOR
+    reg [2047:0] video_trace_file;
+    integer video_trace_fd, video_trace_first, video_trace_last;
+    integer video_trace_x, video_trace_y, video_trace_limit;
+    integer video_trace_pixel_count;
+    integer video_trace_sdram_limit, video_trace_sdram_count;
+    integer video_trace_bank2_count, video_bank2_addr_violations;
+    reg [2:0] video_bank2_watch;
+    reg [2:0] video_bank2_warned;
+    reg [21:0] video_bank2_watch_addr [0:2];
+    integer video_trace_cache_count;
     reg [2047:0] priority_trace_file;
     integer priority_trace_fd, priority_first, priority_last;
     integer priority_limit, priority_count;
@@ -611,6 +621,61 @@ module tb_escape_kids_full_smoke;
             priority_prev_opaque = ~dut.u_game.u_video.u_colmix.u_prio.op;
         end
     end
+
+    // Causal video probe.  It is opt-in and read-only: the sampled values are
+    // the live tilemap, sorted tile-ROM request, returned word, decoder and
+    // palette state at the same native pixel sample used by frame capture.
+    task automatic video_trace_pixel;
+        begin
+            if (video_trace_fd != 0) begin
+                $fwrite(video_trace_fd,
+                    "{\"schema\":\"escape-kids-video-pixel-v1\",\"seq\":%0d,\"frame\":%0d,\"x\":%0d,\"y\":%0d,\"hdump\":\"%0h\",\"vdump\":\"%0h\",\"tile_vaddr\":\"%0h\",\"tile_vaddr_nx\":\"%0h\",\"tile_scan\":\"%0h\",\"tile_map_a\":\"%0h\",\"tile_map_b\":\"%0h\",\"tile_col_cfg\":\"%0h\",\"tile_cab\":\"%0h\",\"tile_vc\":\"%0h\",\"tile_rd_rowscr\":\"%0h\",\"tile_vdumpf\":\"%0h\",\"pre_a\":\"%0h\",\"pre_b\":\"%0h\",\"pre_f\":\"%0h\",\"sorted_a\":\"%0h\",\"sorted_b\":\"%0h\",\"sorted_f\":\"%0h\",\"col_a\":\"%0h\",\"col_b\":\"%0h\",\"col_f\":\"%0h\",\"rom_a_data\":\"%0h\",\"rom_b_data\":\"%0h\",\"rom_f_data\":\"%0h\",\"rom_ok\":\"%0h\",\"draw_a_data\":\"%0h\",\"draw_b_data\":\"%0h\",\"draw_f_data\":\"%0h\",\"hflip_a\":\"%0h\",\"hflip_b\":\"%0h\",\"hsub_a\":\"%0h\",\"hsub_b\":\"%0h\",\"layer_a_pxl\":\"%0h\",\"layer_b_pxl\":\"%0h\",\"layer_f_pxl\":\"%0h\",\"obj_pxl\":\"%0h\",\"mix_pxl\":\"%0h\",\"pal_addr\":\"%0h\",\"pal_dout\":\"%0h\",\"pal_half\":\"%0h\",\"pxl_aux\":\"%0h\",\"bgr\":\"%0h\",\"red\":\"%0h\",\"green\":\"%0h\",\"blue\":\"%0h\",\"lhbl\":\"%0h\",\"lvbl\":\"%0h\"}\n",
+                    video_trace_pixel_count, frame_ord, frame_x, frame_y,
+                    dut.u_game.u_video.u_scroll.hdump,
+                    dut.u_game.u_video.u_scroll.vdump,
+                    dut.u_game.u_video.u_scroll.u_tilemap.vaddr,
+                    dut.u_game.u_video.u_scroll.u_tilemap.vaddr_nx,
+                    dut.u_game.u_video.u_scroll.u_tilemap.scan_dout,
+                    dut.u_game.u_video.u_scroll.u_tilemap.map_a,
+                    dut.u_game.u_video.u_scroll.u_tilemap.map_b,
+                    dut.u_game.u_video.u_scroll.u_tilemap.col_cfg,
+                    dut.u_game.u_video.u_scroll.u_tilemap.cab,
+                    dut.u_game.u_video.u_scroll.u_tilemap.vc,
+                    dut.u_game.u_video.u_scroll.u_tilemap.rd_rowscr,
+                    dut.u_game.u_video.u_scroll.u_tilemap.vdumpf,
+                    dut.u_game.u_video.u_scroll.pre_a,
+                    dut.u_game.u_video.u_scroll.pre_b,
+                    dut.u_game.u_video.u_scroll.pre_f,
+                    dut.u_game.u_video.u_scroll.lyra_addr,
+                    dut.u_game.u_video.u_scroll.lyrb_addr,
+                    dut.u_game.u_video.u_scroll.lyrf_addr,
+                    dut.u_game.u_video.u_scroll.lyra_col,
+                    dut.u_game.u_video.u_scroll.lyrb_col,
+                    dut.u_game.u_video.u_scroll.lyrf_col,
+                    dut.lyra_data, dut.lyrb_data, dut.lyrf_data,
+                    dut.u_game.u_video.lyra_ok,
+                    dut.u_game.u_video.u_scroll.u_draw.pxla_data,
+                    dut.u_game.u_video.u_scroll.u_draw.pxlb_data,
+                    dut.u_game.u_video.u_scroll.u_draw.pxlf_data,
+                    dut.u_game.u_video.u_scroll.u_draw.hflipa,
+                    dut.u_game.u_video.u_scroll.u_draw.hflipb,
+                    dut.u_game.u_video.u_scroll.u_draw.hsub_a,
+                    dut.u_game.u_video.u_scroll.u_draw.hsub_b,
+                    dut.u_game.u_video.lyra_pxl,
+                    dut.u_game.u_video.lyrb_pxl,
+                    dut.u_game.u_video.lyrf_pxl,
+                    dut.u_game.u_video.lyro_pxl,
+                    dut.u_game.u_video.u_colmix.pxl,
+                    dut.u_game.u_video.u_colmix.pal_addr,
+                    dut.u_game.u_video.u_colmix.pal_dout,
+                    dut.u_game.u_video.u_colmix.pal_half,
+                    dut.u_game.u_video.u_colmix.pxl_aux,
+                    dut.u_game.u_video.u_colmix.bgr,
+                    red, green, blue, LHBL, LVBL);
+                video_trace_pixel_count = video_trace_pixel_count + 1;
+            end
+        end
+    endtask
 `endif
 
     // Where do the K052109 tilemap writes go?  Sampled on every clock, not
@@ -651,10 +716,18 @@ module tb_escape_kids_full_smoke;
     reg buserror_ring_we [0:15];
     reg buserror_ring_fetch [0:15];
     reg buserror_ring_is_op [0:15];
+`ifdef JTFRAME_BA2_LEN
+    localparam [1:0] SMOKE_BA2_LAST = (`JTFRAME_BA2_LEN/16)-1;
+`else
+    localparam [1:0] SMOKE_BA2_LAST = 2'd1;
+`endif
     reg pending_valid;
-    reg pending_phase;
+    reg [1:0] pending_phase;
+    reg [1:0] pending_last;
     reg [1:0] pending_bank;
     reg [21:0] pending_addr;
+    integer pending_wait;
+    integer smoke_bank2_wait;
     wire [3:0] request_one = pending_valid ? 4'd0 :
                              ba_rd[0] ? 4'b0001 :
                              ba_rd[1] ? 4'b0010 :
@@ -683,6 +756,204 @@ module tb_escape_kids_full_smoke;
             read_word = {media[idx + 1], media[idx]};
         end
     endfunction
+
+`ifdef VERILATOR
+    // Observe the physical bank-2 response at the model boundary.  The
+    // media bytes and reconstructed word are emitted together so a later
+    // mismatch can distinguish download corruption from a bad requester.
+    always @(posedge clk) begin
+        if (!rst && video_trace_fd != 0 &&
+            frame_ord >= video_trace_first &&
+            frame_ord <= video_trace_last &&
+            (ba_dst[2] || ba_rdy[2]) &&
+            video_trace_sdram_count < video_trace_sdram_limit) begin
+            $fwrite(video_trace_fd,
+                "{\"schema\":\"escape-kids-video-sdram-v1\",\"seq\":%0d,\"frame\":%0d,\"bank\":\"%0h\",\"address\":\"%0h\",\"phase\":\"%0h\",\"media_index\":\"%0h\",\"data_read\":\"%0h\",\"media_lo\":\"%0h\",\"media_hi\":\"%0h\",\"ba2_addr\":\"%0h\",\"lyra_addr\":\"%0h\",\"lyrb_addr\":\"%0h\",\"lyrf_addr\":\"%0h\",\"lyra_cs\":\"%0h\",\"lyrb_cs\":\"%0h\",\"lyrf_cs\":\"%0h\",\"ba_dst\":\"%0h\",\"ba_rdy\":\"%0h\",\"ba_ack\":\"%0h\"}\n",
+                video_trace_sdram_count, frame_ord, pending_bank,
+                pending_addr, pending_phase,
+                media_index(pending_bank, pending_addr + pending_phase),
+                data_read,
+                media[media_index(pending_bank, pending_addr + pending_phase)],
+                media[media_index(pending_bank, pending_addr + pending_phase) + 1],
+                ba2_addr,
+                dut.u_game.u_video.lyra_addr,
+                dut.u_game.u_video.lyrb_addr,
+                dut.u_game.u_video.lyrf_addr,
+                dut.u_game.u_video.lyra_cs,
+                dut.u_game.u_video.lyrb_cs,
+                dut.u_game.u_video.lyrf_cs,
+                ba_dst, ba_rdy, ba_ack);
+            video_trace_sdram_count = video_trace_sdram_count + 1;
+        end
+    end
+
+    // Check address stability from request assertion until arbitration grant.
+    // After grant, both the arbiter and cache have latched the accepted
+    // address, so the consumer may advance safely.
+    always @(posedge clk) begin
+        if (rst) begin
+            video_bank2_watch = 3'b000;
+        end else if (video_trace_fd != 0 &&
+                     frame_ord >= video_trace_first &&
+                     frame_ord <= video_trace_last) begin
+            if (video_bank2_watch[0] && dut.u_bank2.req[0] &&
+                !video_bank2_warned[0] &&
+                dut.u_bank2.slot0_addr_req !== video_bank2_watch_addr[0]) begin
+                video_bank2_addr_violations = video_bank2_addr_violations + 1;
+                $display("ESCAPE KIDS VIDEO BANK2 ADDRESS CHANGED slot=0 frame=%0d old=%h new=%h req=%b sel=%b",
+                    frame_ord, video_bank2_watch_addr[0],
+                    dut.u_bank2.slot0_addr_req, dut.u_bank2.req,
+                    dut.u_bank2.u_ctrl.slot_sel);
+                if (video_trace_bank2_count < video_trace_sdram_limit)
+                    $fwrite(video_trace_fd,
+                        "{\"schema\":\"escape-kids-video-bank2-v1\",\"event\":\"address_changed\",\"slot\":0,\"frame\":%0d,\"old_addr\":\"%0h\",\"new_addr\":\"%0h\",\"req\":\"%0h\",\"slot_sel\":\"%0h\",\"ba2_addr\":\"%0h\"}\n",
+                        frame_ord, video_bank2_watch_addr[0],
+                        dut.u_bank2.slot0_addr_req, dut.u_bank2.req,
+                        dut.u_bank2.u_ctrl.slot_sel, ba2_addr);
+                video_bank2_warned[0] = 1'b1;
+            end
+            if (video_bank2_watch[1] && dut.u_bank2.req[1] &&
+                !video_bank2_warned[1] &&
+                dut.u_bank2.slot1_addr_req !== video_bank2_watch_addr[1]) begin
+                video_bank2_addr_violations = video_bank2_addr_violations + 1;
+                $display("ESCAPE KIDS VIDEO BANK2 ADDRESS CHANGED slot=1 frame=%0d old=%h new=%h req=%b sel=%b",
+                    frame_ord, video_bank2_watch_addr[1],
+                    dut.u_bank2.slot1_addr_req, dut.u_bank2.req,
+                    dut.u_bank2.u_ctrl.slot_sel);
+                if (video_trace_bank2_count < video_trace_sdram_limit)
+                    $fwrite(video_trace_fd,
+                        "{\"schema\":\"escape-kids-video-bank2-v1\",\"event\":\"address_changed\",\"slot\":1,\"frame\":%0d,\"old_addr\":\"%0h\",\"new_addr\":\"%0h\",\"req\":\"%0h\",\"slot_sel\":\"%0h\",\"ba2_addr\":\"%0h\"}\n",
+                        frame_ord, video_bank2_watch_addr[1],
+                        dut.u_bank2.slot1_addr_req, dut.u_bank2.req,
+                        dut.u_bank2.u_ctrl.slot_sel, ba2_addr);
+                video_bank2_warned[1] = 1'b1;
+            end
+            if (video_bank2_watch[2] && dut.u_bank2.req[2] &&
+                !video_bank2_warned[2] &&
+                dut.u_bank2.slot2_addr_req !== video_bank2_watch_addr[2]) begin
+                video_bank2_addr_violations = video_bank2_addr_violations + 1;
+                $display("ESCAPE KIDS VIDEO BANK2 ADDRESS CHANGED slot=2 frame=%0d old=%h new=%h req=%b sel=%b",
+                    frame_ord, video_bank2_watch_addr[2],
+                    dut.u_bank2.slot2_addr_req, dut.u_bank2.req,
+                    dut.u_bank2.u_ctrl.slot_sel);
+                if (video_trace_bank2_count < video_trace_sdram_limit)
+                    $fwrite(video_trace_fd,
+                        "{\"schema\":\"escape-kids-video-bank2-v1\",\"event\":\"address_changed\",\"slot\":2,\"frame\":%0d,\"old_addr\":\"%0h\",\"new_addr\":\"%0h\",\"req\":\"%0h\",\"slot_sel\":\"%0h\",\"ba2_addr\":\"%0h\"}\n",
+                        frame_ord, video_bank2_watch_addr[2],
+                        dut.u_bank2.slot2_addr_req, dut.u_bank2.req,
+                        dut.u_bank2.u_ctrl.slot_sel, ba2_addr);
+                video_bank2_warned[2] = 1'b1;
+            end
+
+            if (video_bank2_watch[0] && dut.u_bank2.u_ctrl.slot_sel[0])
+                video_bank2_watch[0] = 1'b0;
+            if (video_bank2_watch[1] && dut.u_bank2.u_ctrl.slot_sel[1])
+                video_bank2_watch[1] = 1'b0;
+            if (video_bank2_watch[2] && dut.u_bank2.u_ctrl.slot_sel[2])
+                video_bank2_watch[2] = 1'b0;
+
+            if (!video_bank2_watch[0] && dut.u_bank2.req[0]) begin
+                video_bank2_watch[0] = 1'b1;
+                video_bank2_warned[0] = 1'b0;
+                video_bank2_watch_addr[0] = dut.u_bank2.slot0_addr_req;
+            end
+            if (!video_bank2_watch[1] && dut.u_bank2.req[1]) begin
+                video_bank2_watch[1] = 1'b1;
+                video_bank2_warned[1] = 1'b0;
+                video_bank2_watch_addr[1] = dut.u_bank2.slot1_addr_req;
+            end
+            if (!video_bank2_watch[2] && dut.u_bank2.req[2]) begin
+                video_bank2_watch[2] = 1'b1;
+                video_bank2_warned[2] = 1'b0;
+                video_bank2_watch_addr[2] = dut.u_bank2.slot2_addr_req;
+            end
+
+            if (video_trace_bank2_count < video_trace_sdram_limit &&
+                (|dut.u_bank2.req || |dut.u_bank2.u_ctrl.slot_sel ||
+                 ba_dst[2] || ba_rdy[2])) begin
+                $fwrite(video_trace_fd,
+                    "{\"schema\":\"escape-kids-video-bank2-v1\",\"event\":\"sample\",\"seq\":%0d,\"frame\":%0d,\"req\":\"%0h\",\"slot_sel\":\"%0h\",\"slot0_addr_req\":\"%0h\",\"slot1_addr_req\":\"%0h\",\"slot2_addr_req\":\"%0h\",\"ba2_addr\":\"%0h\",\"ba_dst\":\"%0h\",\"ba_rdy\":\"%0h\",\"watch\":\"%0h\",\"lyra_addr\":\"%0h\",\"lyrb_addr\":\"%0h\",\"lyrf_addr\":\"%0h\"}\n",
+                    video_trace_bank2_count, frame_ord,
+                    dut.u_bank2.req, dut.u_bank2.u_ctrl.slot_sel,
+                    dut.u_bank2.slot0_addr_req,
+                    dut.u_bank2.slot1_addr_req,
+                    dut.u_bank2.slot2_addr_req,
+                    ba2_addr, ba_dst[2], ba_rdy[2], video_bank2_watch,
+                    dut.u_game.u_video.lyra_addr,
+                    dut.u_game.u_video.lyrb_addr,
+                    dut.u_game.u_video.lyrf_addr);
+                video_trace_bank2_count = video_trace_bank2_count + 1;
+            end
+        end
+    end
+
+`ifdef ESCAPE_KIDS_CACHE_PROBE
+    // Observe the three bank-2 tile-ROM caches at the same boundary.  This is
+    // diagnostic-only: it distinguishes a correct SDRAM word associated with
+    // the wrong live request from a bad media response without changing any
+    // requester or cache state.
+    always @(posedge clk) begin
+        if (!rst && video_trace_fd != 0 &&
+            frame_ord >= video_trace_first &&
+            frame_ord <= video_trace_last &&
+            video_trace_cache_count < video_trace_sdram_limit &&
+            (|dut.u_bank2.u_ctrl.slot_sel || |dut.u_bank2.req ||
+             ba_dst[2] || ba_rdy[2])) begin
+            $fwrite(video_trace_fd,
+                "{\"schema\":\"escape-kids-video-cache-v2\",\"seq\":%0d,\"frame\":%0d,\"slot_sel\":\"%0h\",\"slot_req\":\"%0h\",\"ba2_addr\":\"%0h\",\"ba_dst\":\"%0h\",\"ba_rdy\":\"%0h\",\"a_addr\":\"%0h\",\"a_sdram_addr\":\"%0h\",\"a_req\":\"%0h\",\"a_data_ok\":\"%0h\",\"a_din_ok\":\"%0h\",\"a_sdram_cs\":\"%0h\",\"a_hit\":\"%0h\",\"a_ok\":\"%0h\",\"a_valid\":\"%0h\",\"a_match\":\"%0h\",\"a_wr_indx\":\"%0h\",\"a_amem0\":\"%0h\",\"a_amem1\":\"%0h\",\"a_amem2\":\"%0h\",\"a_amem3\":\"%0h\",\"b_addr\":\"%0h\",\"b_sdram_addr\":\"%0h\",\"b_req\":\"%0h\",\"b_data_ok\":\"%0h\",\"b_din_ok\":\"%0h\",\"b_sdram_cs\":\"%0h\",\"b_hit\":\"%0h\",\"b_ok\":\"%0h\",\"b_valid\":\"%0h\",\"b_match\":\"%0h\",\"b_wr_indx\":\"%0h\",\"b_amem0\":\"%0h\",\"b_amem1\":\"%0h\",\"b_amem2\":\"%0h\",\"b_amem3\":\"%0h\",\"f_addr\":\"%0h\",\"f_sdram_addr\":\"%0h\",\"f_req\":\"%0h\",\"f_data_ok\":\"%0h\",\"f_din_ok\":\"%0h\",\"f_sdram_cs\":\"%0h\",\"f_hit\":\"%0h\",\"f_ok\":\"%0h\",\"f_valid\":\"%0h\",\"f_match\":\"%0h\",\"f_wr_indx\":\"%0h\",\"f_amem0\":\"%0h\",\"f_amem1\":\"%0h\",\"f_amem2\":\"%0h\",\"f_amem3\":\"%0h\"}\n",
+                video_trace_cache_count, frame_ord,
+                dut.u_bank2.u_ctrl.slot_sel, dut.u_bank2.req,
+                ba2_addr, ba_dst, ba_rdy,
+                dut.u_bank2.u_slot1.genblk1.u_data_cache.addr,
+                dut.u_bank2.u_slot1.genblk1.u_data_cache.sdram_addr,
+                dut.u_bank2.u_slot1.genblk1.u_data_cache.req,
+                dut.u_bank2.u_slot1.genblk1.u_data_cache.data_ok,
+                dut.u_bank2.u_slot1.genblk1.u_data_cache.din_ok,
+                dut.u_bank2.u_slot1.genblk1.u_data_cache.u_cache.sdram_cs,
+                dut.u_bank2.u_slot1.genblk1.u_data_cache.u_cache.hit,
+                dut.u_bank2.u_slot1.genblk1.u_data_cache.u_cache.ok,
+                dut.u_bank2.u_slot1.genblk1.u_data_cache.u_cache.valid,
+                dut.u_bank2.u_slot1.genblk1.u_data_cache.u_cache.match,
+                dut.u_bank2.u_slot1.genblk1.u_data_cache.u_cache.wr_indx,
+                dut.u_bank2.u_slot1.genblk1.u_data_cache.u_cache.amem[0],
+                dut.u_bank2.u_slot1.genblk1.u_data_cache.u_cache.amem[1],
+                dut.u_bank2.u_slot1.genblk1.u_data_cache.u_cache.amem[2],
+                dut.u_bank2.u_slot1.genblk1.u_data_cache.u_cache.amem[3],
+                dut.u_bank2.u_slot2.genblk1.u_data_cache.addr,
+                dut.u_bank2.u_slot2.genblk1.u_data_cache.sdram_addr,
+                dut.u_bank2.u_slot2.genblk1.u_data_cache.req,
+                dut.u_bank2.u_slot2.genblk1.u_data_cache.data_ok,
+                dut.u_bank2.u_slot2.genblk1.u_data_cache.din_ok,
+                dut.u_bank2.u_slot2.genblk1.u_data_cache.u_cache.sdram_cs,
+                dut.u_bank2.u_slot2.genblk1.u_data_cache.u_cache.hit,
+                dut.u_bank2.u_slot2.genblk1.u_data_cache.u_cache.ok,
+                dut.u_bank2.u_slot2.genblk1.u_data_cache.u_cache.valid,
+                dut.u_bank2.u_slot2.genblk1.u_data_cache.u_cache.match,
+                dut.u_bank2.u_slot2.genblk1.u_data_cache.u_cache.wr_indx,
+                dut.u_bank2.u_slot2.genblk1.u_data_cache.u_cache.amem[0],
+                dut.u_bank2.u_slot2.genblk1.u_data_cache.u_cache.amem[1],
+                dut.u_bank2.u_slot2.genblk1.u_data_cache.u_cache.amem[2],
+                dut.u_bank2.u_slot2.genblk1.u_data_cache.u_cache.amem[3],
+                dut.u_bank2.u_slot0.genblk1.u_data_cache.addr,
+                dut.u_bank2.u_slot0.genblk1.u_data_cache.sdram_addr,
+                dut.u_bank2.u_slot0.genblk1.u_data_cache.req,
+                dut.u_bank2.u_slot0.genblk1.u_data_cache.data_ok,
+                dut.u_bank2.u_slot0.genblk1.u_data_cache.din_ok,
+                dut.u_bank2.u_slot0.genblk1.u_data_cache.u_cache.sdram_cs,
+                dut.u_bank2.u_slot0.genblk1.u_data_cache.u_cache.hit,
+                dut.u_bank2.u_slot0.genblk1.u_data_cache.u_cache.ok,
+                dut.u_bank2.u_slot0.genblk1.u_data_cache.u_cache.valid,
+                dut.u_bank2.u_slot0.genblk1.u_data_cache.u_cache.match,
+                dut.u_bank2.u_slot0.genblk1.u_data_cache.u_cache.wr_indx,
+                dut.u_bank2.u_slot0.genblk1.u_data_cache.u_cache.amem[0],
+                dut.u_bank2.u_slot0.genblk1.u_data_cache.u_cache.amem[1],
+                dut.u_bank2.u_slot0.genblk1.u_data_cache.u_cache.amem[2],
+                dut.u_bank2.u_slot0.genblk1.u_data_cache.u_cache.amem[3]);
+            video_trace_cache_count = video_trace_cache_count + 1;
+        end
+    end
+`endif
+`endif
 
     task automatic service_gate_finalize;
         input ok;
@@ -796,40 +1067,53 @@ module tb_escape_kids_full_smoke;
     // DOUBLE=1 path consumes the first beat at DST and the second at RDY;
     // presenting only one beat corrupts every four-byte cache line and makes
     // the CPU appear to execute phantom opcodes.
-    assign ba_dst = pending_valid && !pending_phase ? (4'b0001 << pending_bank) : 4'b0000;
-    assign ba_rdy = pending_valid &&  pending_phase ? (4'b0001 << pending_bank) : 4'b0000;
+    assign ba_dst = pending_valid && pending_wait==0 && pending_phase==0 ?
+                    (4'b0001 << pending_bank) : 4'b0000;
+    assign ba_rdy = pending_valid && pending_wait==0 &&
+                    pending_phase==pending_last ?
+                    (4'b0001 << pending_bank) : 4'b0000;
     assign ba_dok = ba_rdy;
     assign data_read = pending_valid ? read_word(pending_bank, pending_addr + pending_phase) : 16'h0000;
 
     always @(posedge clk) begin
         if (pending_valid) begin
-            if (!pending_phase)
-                pending_phase <= 1'b1;
+            if (pending_wait != 0)
+                pending_wait <= pending_wait-1;
+            else if (pending_phase != pending_last)
+                pending_phase <= pending_phase+1'b1;
             else begin
                 pending_valid <= 1'b0;
-                pending_phase <= 1'b0;
+                pending_phase <= 2'd0;
                 rom_reads <= rom_reads + 1;
             end
         end else if (request_one[0]) begin
             pending_bank <= 2'd0;
             pending_addr <= ba0_addr;
             pending_valid <= 1'b1;
-            pending_phase <= 1'b0;
+            pending_phase <= 2'd0;
+            pending_last <= 2'd1;
+            pending_wait <= 0;
         end else if (request_one[1]) begin
             pending_bank <= 2'd1;
             pending_addr <= ba1_addr;
             pending_valid <= 1'b1;
-            pending_phase <= 1'b0;
+            pending_phase <= 2'd0;
+            pending_last <= 2'd1;
+            pending_wait <= 0;
         end else if (request_one[2]) begin
             pending_bank <= 2'd2;
             pending_addr <= ba2_addr;
             pending_valid <= 1'b1;
-            pending_phase <= 1'b0;
+            pending_phase <= 2'd0;
+            pending_last <= SMOKE_BA2_LAST;
+            pending_wait <= smoke_bank2_wait;
         end else if (request_one[3]) begin
             pending_bank <= 2'd3;
             pending_addr <= ba3_addr;
             pending_valid <= 1'b1;
-            pending_phase <= 1'b0;
+            pending_phase <= 2'd0;
+            pending_last <= 2'd1;
+            pending_wait <= 0;
         end
 
         if (prog_we) begin
@@ -1124,6 +1408,15 @@ module tb_escape_kids_full_smoke;
                 frame_hash = (frame_hash ^ {24'd0, red})   * 32'h01000193;
                 frame_hash = (frame_hash ^ {24'd0, green}) * 32'h01000193;
                 frame_hash = (frame_hash ^ {24'd0, blue})  * 32'h01000193;
+`ifdef VERILATOR
+                if (video_trace_fd != 0 &&
+                    frame_ord >= video_trace_first &&
+                    frame_ord <= video_trace_last &&
+                    (video_trace_x < 0 || frame_x == video_trace_x) &&
+                    (video_trace_y < 0 || frame_y == video_trace_y) &&
+                    video_trace_pixel_count < video_trace_limit)
+                    video_trace_pixel;
+`endif
                 frame_x = frame_x + 1;
             end
             if (frame_lhbl_prev && !LHBL) begin
@@ -1158,6 +1451,12 @@ module tb_escape_kids_full_smoke;
                         dma_trace_fd = 0;
                         dma_trace_enabled = 1'b0;
                     end
+`ifdef VERILATOR
+                    if (video_trace_fd != 0) begin
+                        $fclose(video_trace_fd);
+                        video_trace_fd = 0;
+                    end
+`endif
                     $display("ESCAPE KIDS FRAME CAPTURE DONE frames=%0d", frame_ord);
                     $finish;
                 end
@@ -2144,9 +2443,13 @@ module tb_escape_kids_full_smoke;
         last_snapshot_samples = 0;
         input_done_cycle = 14000000;
         pending_valid = 1'b0;
-        pending_phase = 1'b0;
+        pending_phase = 2'd0;
+        pending_last = 2'd1;
         pending_bank = 2'd0;
         pending_addr = 22'd0;
+        pending_wait = 0;
+        if (!$value$plusargs("SMOKE_BANK2_WAIT=%d", smoke_bank2_wait))
+            smoke_bank2_wait = 0;
         trace_file = "";
         trace_fd = 0;
         trace_seq = 0;
@@ -2279,6 +2582,24 @@ module tb_escape_kids_full_smoke;
         frame_hld_prev = 1'b0;
         frame_vld_prev = 1'b0;
 `ifdef VERILATOR
+        video_trace_file = "";
+        video_trace_fd = 0;
+        video_trace_first = 0;
+        video_trace_last = 1000000;
+        video_trace_x = -1;
+        video_trace_y = -1;
+        video_trace_limit = 20000;
+        video_trace_pixel_count = 0;
+        video_trace_sdram_limit = 200000;
+        video_trace_sdram_count = 0;
+        video_trace_bank2_count = 0;
+        video_bank2_addr_violations = 0;
+        video_bank2_watch = 3'b000;
+        video_bank2_warned = 3'b000;
+        video_bank2_watch_addr[0] = 0;
+        video_bank2_watch_addr[1] = 0;
+        video_bank2_watch_addr[2] = 0;
+        video_trace_cache_count = 0;
         priority_trace_file = "";
         priority_trace_fd = 0;
         priority_first = 0;
@@ -2410,6 +2731,23 @@ module tb_escape_kids_full_smoke;
             end
         end
 `ifdef VERILATOR
+        if ($value$plusargs("SMOKE_VIDEO_TRACE=%s", video_trace_file)) begin
+            video_trace_fd = $fopen(video_trace_file, "w");
+            if (video_trace_fd == 0)
+                $fatal(1, "Cannot open video trace %0s", video_trace_file);
+            if (!$value$plusargs("SMOKE_VIDEO_FIRST=%d", video_trace_first))
+                video_trace_first = 0;
+            if (!$value$plusargs("SMOKE_VIDEO_LAST=%d", video_trace_last))
+                video_trace_last = 1000000;
+            if (!$value$plusargs("SMOKE_VIDEO_X=%d", video_trace_x))
+                video_trace_x = -1;
+            if (!$value$plusargs("SMOKE_VIDEO_Y=%d", video_trace_y))
+                video_trace_y = -1;
+            if (!$value$plusargs("SMOKE_VIDEO_LIMIT=%d", video_trace_limit))
+                video_trace_limit = 20000;
+            if (!$value$plusargs("SMOKE_VIDEO_SDRAM_LIMIT=%d", video_trace_sdram_limit))
+                video_trace_sdram_limit = 200000;
+        end
         if ($value$plusargs("SMOKE_PRIORITY_TRACE=%s", priority_trace_file)) begin
             priority_trace_fd = $fopen(priority_trace_file, "w");
             if (priority_trace_fd == 0)

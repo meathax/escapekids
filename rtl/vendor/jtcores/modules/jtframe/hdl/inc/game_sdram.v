@@ -489,7 +489,9 @@ jtframe_{{.MemType}}_{{len .Buses}}slot{{with lt 1 (len .Buses)}}s{{end}} #(
 `ifdef JTFRAME_BA{{$bank}}_LEN
 {{- range $index, $each:=.Buses}}
 {{- if not .Rw}}
+`ifndef JTFRAME_BA{{$bank}}_SLOT{{$index}}_NODOUBLE
     ,.SLOT{{$index}}_DOUBLE(1){{ end }}
+`endif
 {{- end}}
 `endif
 {{- $is_rom := eq .MemType "rom" }}
