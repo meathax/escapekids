@@ -31,8 +31,8 @@
 `define JTFRAME_IOCTL_RD 128
 `define JTFRAME_OSD_TEST
 `define JTFRAME_NOMRA_DIP
-`define JTFRAME_ARX 5
-`define JTFRAME_ARY 4
+`define JTFRAME_ARX 4
+`define JTFRAME_ARY 3
 // Defaults emitted by JTFRAME for non-line-buffer MiSTer targets.
 `define JTFRAME_180SHIFT 0
 `define JTFRAME_SHIFT 1

@@ -62,6 +62,7 @@ module emu(`include "sys/emu_ports.vh");
 
     // JTFRAME reserves the leading framebuffer/scanline capability bits.
     tri [48:0] jt_hps_bus;
+    wire jtframe_vga_de;
 `ifdef VERILATOR
     // The headless simulator has no tran primitive; preserve both directions.
     /* verilator lint_off UNOPTFLAT */
@@ -84,7 +85,7 @@ module emu(`include "sys/emu_ports.vh");
         .CLK_50M(CLK_50M), .RESET(RESET), .HPS_BUS(jt_hps_bus),
         .CLK_VIDEO(CLK_VIDEO), .CE_PIXEL(CE_PIXEL),
         .VGA_R(VGA_R), .VGA_G(VGA_G), .VGA_B(VGA_B),
-        .VGA_HS(VGA_HS), .VGA_VS(VGA_VS), .VGA_DE(VGA_DE),
+        .VGA_HS(VGA_HS), .VGA_VS(VGA_VS), .VGA_DE(jtframe_vga_de),
         .VGA_F1(VGA_F1), .VGA_SL(VGA_SL), .VGA_SCALER(VGA_SCALER),
         .VGA_DISABLE(VGA_DISABLE), .HDMI_WIDTH(HDMI_WIDTH),
         .HDMI_HEIGHT(HDMI_HEIGHT), .HDMI_FREEZE(HDMI_FREEZE),
@@ -110,6 +111,21 @@ module emu(`include "sys/emu_ports.vh");
         .db15_en(jt_db15_en), .uart_en(jt_uart_en),
         .gun_border_en(jt_gun_border_en), .show_osd(jt_show_osd),
         .OSD_STATUS(OSD_STATUS)
+    );
+
+    // The imported JTFRAME path remains the source of RGB and sync.  Only
+    // the final active-enable interval is cropped for Escape Kids' 288x240
+    // presentation window; the game raster and all game-visible timing stay
+    // on the untouched signals inside escape_kids_jtframe_emu.
+    escape_kids_presentation_crop #(
+        .LEFT  (12),
+        .RIGHT (300)
+    ) u_presentation_crop (
+        .clk_video (CLK_VIDEO),
+        .reset     (RESET),
+        .ce_pixel  (CE_PIXEL),
+        .de_in     (jtframe_vga_de),
+        .de_out    (VGA_DE)
     );
 
 endmodule
