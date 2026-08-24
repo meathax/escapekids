@@ -453,3 +453,56 @@ Known unknowns:
   unmeasured. They do not invalidate closure of the reproduced first
   divergence. A fresh compressed Quartus RBF was produced on 2026-08-24;
   hardware video check remains required before claiming hardware validation.
+
+## 2026-08-24 hardware blue-background screenshot follow-up
+
+Observation:
+
+- The supplied `D:/Downloads/20260823_012151-screen.png` contains repeated
+  colored runs that are 8 pixels wide and one raster line high. They are in
+  the blue background above the player card; presentation cropping is not the
+  cause under investigation.
+
+Evidence:
+
+- **KNOWN:** the pinned MAME pair is deterministic for the initial-blue
+  scenario. The current strict headless Verilator capture
+  `.mister/frame-cap-current-blue-b/` also exits cleanly and produces frame
+  400 hash `1652520231`, matching the two earlier post-fix captures
+  `.mister/frame-cap-blue-current-a/` and `-b/`.
+- **KNOWN:** the authenticated tile-strip comparator
+  `.mister/comparators/esckids-tile-strip-deadline-final.json` binds the first
+  reproduced mismatch to layer B at screen `(144,100)`, tile word address
+  `0x3bbfc`, with expected `0x00ffffff` and stale actual `0xffffffff` after a
+  4,118-word matching prefix. Its post-fix replay has 9,840 F/A/B loads per
+  layer, zero ROM mismatches, zero pre-grant address changes, and identical
+  repeated trace hashes.
+- **KNOWN:** commit `92ceef4` already contains the causal RTL/integration
+  correction: bank 2 uses a 64-bit transfer and slot 0 remains single-line.
+  The current source has `JTFRAME_BA2_LEN 64` and
+  `JTFRAME_BA2_SLOT0_NODOUBLE`; the existing `Arcade-EscapeKids_20260824.rbf`
+  was refreshed after that fix.
+
+Hypotheses:
+
+- **INFERRED:** the supplied artifact is the same stale bank-2 tile-row class
+  previously reproduced by the 32-bit deadline experiment.
+- **HYPOTHESIS:** if the artifact was captured from the refreshed RBF, the
+  remaining cause is physical SDRAM/fitter margin rather than a new logical
+  tile or crop fault.
+- **HYPOTHESIS:** a presentation/capture-only artifact remains possible until
+  a raw native hardware frame is captured from the identified RBF.
+
+Decision:
+
+- No second RTL workaround is applied. The first causal RTL correction is
+  already present and the clean post-fix Verilator/MAME evidence does not
+  justify changing cache widths, slot priority, video coordinates, or output
+  cropping again.
+
+Known unknowns:
+
+- The RBF hash loaded for the supplied hardware image and the physical SDRAM
+  timing margin are not present in the screenshot. Hardware closure requires
+  loading the refreshed RBF and recapturing this exact blue window before any
+  further RTL change is selected.
