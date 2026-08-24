@@ -108,18 +108,30 @@ localparam PAUSE_BIT  = COIN_BIT+1;
 
 reg        joy_pause=0, joy_test=0;
 wire [3:0] joy_start, joy_coin;
+wire       joy_service;
 
 `ifdef POCKET   // The Pocket only uses the small buttons at the front for these functions
     always @(posedge clk) begin
         joy_pause <= board_coin[0] & board_joy1[4];
         joy_test  <= board_coin[0] & board_joy1[5];
     end
+    assign joy_service = 1'b0;
     assign joy_start = 0;
     assign joy_coin  = 0;
 `else
     always @(posedge clk) begin
+`ifdef JTFRAME_ESCKIDS_SERVICE_TEST
+        joy_pause <= 1'b0;
+        joy_test  <= board_joy1[PAUSE_BIT+1] | board_joy2[PAUSE_BIT+1] | board_joy3[PAUSE_BIT+1] | board_joy4[PAUSE_BIT+1];
+`else
         joy_pause <= board_joy1[PAUSE_BIT] | board_joy2[PAUSE_BIT] | board_joy3[PAUSE_BIT] | board_joy4[PAUSE_BIT];
+`endif
     end
+`ifdef JTFRAME_ESCKIDS_SERVICE_TEST
+    assign joy_service = board_joy1[PAUSE_BIT] | board_joy2[PAUSE_BIT] | board_joy3[PAUSE_BIT] | board_joy4[PAUSE_BIT];
+`else
+    assign joy_service = 1'b0;
+`endif
     assign joy_start = { board_joy4[START_BIT], board_joy3[START_BIT], board_joy2[START_BIT], board_joy1[START_BIT]};
     assign joy_coin  = { board_joy4[COIN_BIT] , board_joy3[COIN_BIT] , board_joy2[COIN_BIT] , board_joy1[COIN_BIT]};
 `endif
@@ -137,7 +149,7 @@ jtframe_joysticks u_joysticks(
     .board_start( board_start   ),
     .key_coin   ( key_coin      ),
     .key_start  ( key_start     ),
-    .key_service( key_service   ),
+    .key_service( key_service | joy_service ),
     .key_reset  ( key_reset     ),
     .joy_coin   ( joy_coin      ),
     .joy_start  ( joy_start     ),

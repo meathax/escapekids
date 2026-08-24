@@ -140,6 +140,10 @@ reg         ram_cs, banked_cs, io_cs, pal_cs, snd_cs,
 wire        dtack;  // to do: add delay for io_cs
 reg         rst_cmb;
 wire        eep_rdy, eep_do, irq_mx, firqn_ff, irqn_ff, cab_rd, firqn;
+// Escape Kids has one active-low MAME SERVICE input for both the cabinet
+// service controls and the physical test switch.
+wire        esckids_service;
+assign      esckids_service = service & dip_test;
 reg         eep_di, eep_clk, eep_cs, irqen, firqen, WOC1, WOC0,
             bankr;
 
@@ -618,10 +622,10 @@ always @(posedge clk) begin
         end
         if( esckids ) begin
             // MAME's EEPROM port: DO, READY, service/test, and OBJ busy.
-            if( eeprom_cs ) port_in <= { 4'hf, dma_bsy, service, eep_rdy, eep_do };
+            if( eeprom_cs ) port_in <= { 4'hf, dma_bsy, esckids_service, eep_rdy, eep_do };
             if( stsw_cs ) port_in <= cabinet_2p ?
-                { 3'b111, service, 2'b11, cab_1p[1], cab_1p[0] } :
-                { 4'hf, service, 3'b111 };
+                { 3'b111, esckids_service, 2'b11, cab_1p[1], cab_1p[0] } :
+                { 4'hf, esckids_service, 3'b111 };
         end else begin
             // only simson
             if( eeprom_cs ) port_in <= A[0] ? { WOC1, WOC0, eep_rdy, eep_do,

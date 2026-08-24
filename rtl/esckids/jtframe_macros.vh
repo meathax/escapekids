@@ -16,6 +16,10 @@
 `define JTFRAME_WIDTH 320
 `define JTFRAME_HEIGHT 240
 `define JTFRAME_BUTTONS 3
+// Escape's MRA uses the two slots after Start/Coin for Service and Test.
+// JTFRAME's generic decoder reserves the first of those slots for pause;
+// route this profile through its actual service/test inputs instead.
+`define JTFRAME_ESCKIDS_SERVICE_TEST
 `define JTFRAME_JOY_DURL
 `define JTFRAME_JOY1_POS
 `define JTFRAME_RATE 59.19
