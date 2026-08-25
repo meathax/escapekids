@@ -219,64 +219,72 @@ generate
     end
 endgenerate
 
+// The single pending register that used to sit here silently overwrote a
+// queued word whenever a second ioctl write arrived while the SDRAM write
+// was still un-acked, and nothing throttles the HPS (ioctl_wait is tied to
+// the DDR dump path only).  Every SDRAM stall longer than one ioctl beat -
+// a refresh burst, a row miss, a bank conflict - therefore dropped download
+// bytes, leaving those SDRAM words holding stale contents.  Queue the words
+// instead so a stall is absorbed rather than discarded.
+localparam FIFOAW = 6;   // 64 entries, enough for a full refresh burst
+localparam FIFODW = (SDRAMW-1) + 8 + 2 + 2;
+
+reg  [FIFODW-1:0] fifo[0:(1<<FIFOAW)-1];
+reg  [FIFOAW:0]   fifo_wptr, fifo_rptr;
+wire [FIFOAW:0]   fifo_used  = fifo_wptr - fifo_rptr;
+wire              fifo_empty = fifo_wptr == fifo_rptr;
+wire              fifo_full  = fifo_used == (1<<FIFOAW);
+wire [FIFODW-1:0] fifo_dout  = fifo[fifo_rptr[FIFOAW-1:0]];
+wire [FIFODW-1:0] fifo_din   = { nx_prog_addr, use_ioctl_dout, nx_prog_mask, nx_prog_ba };
+wire              new_word   = use_ioctl_wr && use_ioctl_rom && !use_header && !is_prom;
+// A write slot is free when nothing is outstanding, or the outstanding one
+// is being acknowledged this cycle.
+wire              slot_free  = !prog_we || sdram_ack;
+
+`ifdef SIMULATION
+integer fifo_ovfl = 0;
+always @(posedge clk) if( new_word && fifo_full && !(slot_free && fifo_empty) )
+    fifo_ovfl <= fifo_ovfl + 1;
+`endif
+
+task issue_from_fifo; begin
+    { prog_addr, data_out, prog_mask, prog_ba } <= fifo_dout;
+    prog_we   <= 1;
+    prom_we   <= 0;
+    fifo_rptr <= fifo_rptr + 1'd1;
+end endtask
+
+initial begin
+    fifo_wptr = 0;
+    fifo_rptr = 0;
+end
+
 always @(posedge clk) begin
-    if( use_ioctl_wr && use_ioctl_rom && !use_header ) begin
-        if( is_prom ) begin
-            prog_addr <= use_part_addr[SDRAMW-2:0];
-            prom_we   <= 1;
-            prog_we   <= 0;
-            data_out  <= use_ioctl_dout;
-            prog_mask <= nx_prog_mask;
-        end else if( sdram_pending ) begin
-            pend_addr <= nx_prog_addr;
-            pend_data <= use_ioctl_dout;
-            pend_mask <= nx_prog_mask;
-            pend_ba   <= nx_prog_ba;
-            pend_we   <= 1;
-            prom_we   <= 0;
-        end else if( prog_we && sdram_ack && pend_we ) begin
-            prog_addr <= pend_addr;
-            data_out  <= pend_data;
-            prog_mask <= pend_mask;
-            prog_ba   <= pend_ba;
-            prog_we   <= 1;
-            prom_we   <= 0;
-            pend_addr <= nx_prog_addr;
-            pend_data <= use_ioctl_dout;
-            pend_mask <= nx_prog_mask;
-            pend_ba   <= nx_prog_ba;
-            pend_we   <= 1;
+    // ---- enqueue side
+    if( new_word && !fifo_full ) begin
+        fifo[fifo_wptr[FIFOAW-1:0]] <= fifo_din;
+        fifo_wptr <= fifo_wptr + 1'd1;
+    end
+
+    // ---- PROM writes bypass the SDRAM path entirely
+    if( use_ioctl_wr && use_ioctl_rom && !use_header && is_prom ) begin
+        prog_addr <= use_part_addr[SDRAMW-2:0];
+        prom_we   <= 1;
+        prog_we   <= 0;
+        data_out  <= use_ioctl_dout;
+        prog_mask <= nx_prog_mask;
+    end else if( slot_free ) begin
+        // ---- dequeue side: start the next queued word, or go idle.
+        // Every SDRAM-bound word travels through the queue, so a word pushed
+        // this cycle is issued on the next one.
+        if( !fifo_empty ) begin
+            issue_from_fifo;
         end else begin
-            prog_addr <= nx_prog_addr;
-            data_out  <= use_ioctl_dout;
-            prog_mask <= nx_prog_mask;
-            prog_ba   <= nx_prog_ba;
-            prom_we   <= 0;
-            prog_we   <= 1;
+            prog_we <= 0;
+            prom_we <= 0;
         end
-    end else begin
-        if( sdram_ack ) begin
-            if( pend_we ) begin
-                prog_addr <= pend_addr;
-                data_out  <= pend_data;
-                prog_mask <= pend_mask;
-                prog_ba   <= pend_ba;
-                prog_we   <= 1;
-                prom_we   <= 0;
-                pend_we   <= 0;
-            end else begin
-                prog_we <= 0;
-                prom_we <= 0;
-            end
-        end else if( !use_ioctl_rom ) begin
-            if( prog_we ) begin
-                prom_we <= 0;
-            end else begin
-                prog_we <= 0;
-                prom_we <= 0;
-                pend_we <= 0;
-            end
-        end
+    end else if( prog_we ) begin
+        prom_we <= 0;
     end
 end
 

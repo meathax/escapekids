@@ -556,7 +556,12 @@ always @(*) begin
     // Debt-forced refresh (help) only interleaves with pending requests
     // inside rfsh_win (or during ROM programming, when video is not live).
     // Idle refresh keeps its classic any-time behavior.
-    rfsh_bg = &idle && (noreq | help_g) && rfsh_br;
+    // During ROM programming the prog request keeps noreq low for the whole
+    // multi-second download, so refresh could only ever win through the debt
+    // "help" path and a saturated write stream can starve it completely.
+    // SDRAM rows still need refreshing while the download runs, so make
+    // refresh eligible at every all-idle window while prog_en is asserted.
+    rfsh_bg = &idle && (noreq | help_g | prog_en) && rfsh_br;
     prog_bg = pre_br & !rfshing;
     if( rfshing ) begin
         bg=0;
