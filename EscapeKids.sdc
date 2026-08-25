@@ -29,3 +29,26 @@ set_clock_groups -exclusive \
     -group [get_clocks {FPGA_CLK1_50}] \
     -group [get_clocks {FPGA_CLK2_50}] \
     -group [get_clocks {FPGA_CLK3_50}]
+
+# ---------------------------------------------------------------------------
+# SDRAM interface timing (previously unconstrained: TimeQuest never analyzed
+# any SDRAM pin path in this project; upstream jtframe ships an equivalent
+# sdram_clk48.sdc generated clock for its own builds).
+# The board clock is the PLL's shifted 48 MHz output (general[1]) driven out
+# on the SDRAM_CLK pin; the SDRAM chip launches/captures at that clock while
+# the controller launches/captures at the unshifted 48 MHz (general[0]).
+set sdram_clk_src [get_pins {emu|u_jtframe|pll|u_pll|general[1].gpll~PLL_OUTPUT_COUNTER|divclk}]
+if { [get_collection_size $sdram_clk_src] != 1 } {
+    error "Expected exactly one shifted-48MHz PLL output pin for SDRAM_CLK"
+}
+create_generated_clock -name SDRAM_CLK -source $sdram_clk_src -divide_by 1 [get_ports {SDRAM_CLK}]
+
+# AS4C32M16SB / W9825G6KH class, CL2, -6/-7 grade, conservative values.
+# Inputs: data valid tAC(max)=6.0 ns after SDRAM_CLK, held tOH(min)=2.7 ns.
+set_input_delay  -clock SDRAM_CLK -max 6.0 [get_ports {SDRAM_DQ[*]}]
+set_input_delay  -clock SDRAM_CLK -min 2.7 [get_ports {SDRAM_DQ[*]}]
+
+# Outputs: chip needs tIS=1.5 ns setup, tIH=0.8 ns hold at SDRAM_CLK.
+set sdram_outs [get_ports {SDRAM_A[*] SDRAM_BA[*] SDRAM_DQ[*] SDRAM_DQML SDRAM_DQMH SDRAM_nCAS SDRAM_nRAS SDRAM_nWE SDRAM_nCS SDRAM_CKE}]
+set_output_delay -clock SDRAM_CLK -max 1.5  $sdram_outs
+set_output_delay -clock SDRAM_CLK -min -0.8 $sdram_outs
