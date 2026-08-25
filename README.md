@@ -17,6 +17,7 @@ Both MRAs use the same `Arcade-EscapeKids` core and select the cabinet/profile d
 - Start, Coin, Service and Test controls
 - Native horizontal arcade video and MiSTer video options
 - Stereo audio
+- Optional "Mute One-Two Voice" toggle that silences the character "one, two" voice calls (sound-test entries 60 and 62)
 - Persistent 128-byte ER5911-compatible NVRAM for game high scores
 
 ## Hardware model
