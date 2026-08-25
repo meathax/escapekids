@@ -800,6 +800,7 @@ jtframe_board_sdram #(
     .clk        ( clk_rom       ),
     .init       ( sdram_init    ),
     .prog_en    ( prog_en       ),
+    .lhbl       ( LHBL          ),
 
     .ba0_addr   ( bax_addr      ),
     .ba1_addr   ( ba1_addr      ),

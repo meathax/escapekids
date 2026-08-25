@@ -34,6 +34,21 @@
 // all three K052109 layers meet the K051962's fixed pixel-load deadline.
 `define JTFRAME_BA2_LEN 64
 `define JTFRAME_BA2_SLOT0_NODOUBLE
+// The K051962 latches each layer word on a fixed pixel deadline with no
+// handshake, so bank 2 must win SDRAM arbitration ahead of the CPU (bank 0)
+// and PCM (bank 1) requests, which both tolerate waits.  Without this, a
+// bank-0/bank-1 grant between the F/A/B fetches plus a refresh cycle can
+// push the layer-B word past its deadline and produce stale 8x1 strips on
+// hardware only (the Verilator bench models SDRAM functionally and never
+// exercises controller arbitration).
+`define JTFRAME_BA2_PRIO
+// Second hardware-only latency source: when sustained CPU/PCM/sprite traffic
+// keeps the bus busy, the controller's refresh debt builds until its "help"
+// mode forces refresh cycles into every arbitration gap mid-line, blocking
+// all banks far beyond the 64-clock tile group budget.  Restrict the forced
+// catch-up to horizontal blanking (and ROM download); idle-gap refreshes are
+// unaffected and the per-line refresh budget still averages the JEDEC rate.
+`define JTFRAME_RFSH_HBLANK
 `define JTFRAME_BA3_START 26'h2E0000
 `define JTFRAME_PROM_START 26'h6E0000
 `define JTFRAME_IOCTL_RD 128

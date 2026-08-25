@@ -43,8 +43,12 @@ module jtframe_sdram64 #(
 
               MISTER =1,     // shorts dqm to address bus 12/11 signals
               RFSHCNT=9,     // 8192 every 64ms or 1 every 7.8us ~ 8.2 per line (15kHz)
-              BAPRIO =1      // Bank requests are handled with higher priority to bank 0
+              BAPRIO =1,     // Bank requests are handled with higher priority to bank 0
                              // and lower to to bank 3
+              BA2_PRIO=0     // Grants bank 2 the top fixed priority (2>0>1>3).
+                             // Use when bank 2 feeds a consumer with a hard
+                             // pixel deadline and no handshake (K051962 tile
+                             // shifters), while banks 0/1/3 tolerate waits.
 )(
     input               rst,
     input               clk,
@@ -80,6 +84,12 @@ module jtframe_sdram64 #(
     output  reg         prog_ack,
 
     input               rfsh, // triggers a distributed cycle of RFSHCNT refresh commands
+    input               rfsh_win, // window where debt-forced (help) refresh may
+                                  // interleave with pending requests. Tie to 1
+                                  // for the classic any-time behavior; drive
+                                  // with ~LHBL to keep forced refresh bursts
+                                  // out of the active-video fetch window.
+                                  // Idle-time refresh (noreq) is not gated.
                               // This is meant to be the horizontal blanking of a 15kHz video
                               // signal. Using HB as rfsh signal also prevents having a bank
                               // active for longer than tRAS_max (120us)
@@ -130,6 +140,12 @@ wire  [3:0] br, bx0_cmd, bx1_cmd, bx2_cmd, bx3_cmd, rfsh_cmd,
             ba_dst, ba_dbusy, ba_dbusy64, ba_rdy, ba_dok,
             init_cmd, post_act, next_cmd, dqm_busy, match;
 wire        all_act, rfshing, rfsh_br, noreq, help;
+// Debt-forced refresh handshake, gated to the allowed window. The bank
+// engines stop launching new transactions while their help input is high,
+// so the raw help signal must never be visible to them outside the window
+// or the whole bus starves without any refresh running.
+wire        help_g;
+assign      help_g = help & (rfsh_win | prog_en);
 reg         all_dbusy, all_dbusy64;
 reg   [3:0] bg, cmd;
 reg  [14:0] prio_lfsr;
@@ -357,7 +373,7 @@ jtframe_sdram64_bank #(
 ) u_bank0(
     .rst        ( other_rst  ),
     .clk        ( clk        ),
-    .help       ( help       ),
+    .help       ( help_g     ),
 
     // requests
     .addr       ( ba0_addr_l ),
@@ -405,7 +421,7 @@ jtframe_sdram64_bank #(
 ) u_bank1(
     .rst        ( other_rst  ),
     .clk        ( clk        ),
-    .help       ( help       ),
+    .help       ( help_g     ),
 
     // requests
     .addr       ( ba1_addr_l ),
@@ -452,7 +468,7 @@ jtframe_sdram64_bank #(
 ) u_bank2(
     .rst        ( other_rst  ),
     .clk        ( clk        ),
-    .help       ( help       ),
+    .help       ( help_g     ),
 
     // requests
     .addr       ( ba2_addr_l ),
@@ -499,7 +515,7 @@ jtframe_sdram64_bank #(
 ) u_bank3(
     .rst        ( other_rst  ),
     .clk        ( clk        ),
-    .help       ( help       ),
+    .help       ( help_g     ),
 
     // requests
     .addr       ( ba3_addr_l ),
@@ -537,12 +553,23 @@ jtframe_sdram64_bank #(
 );
 
 always @(*) begin
-    rfsh_bg = &idle && (noreq | help) && rfsh_br;
+    // Debt-forced refresh (help) only interleaves with pending requests
+    // inside rfsh_win (or during ROM programming, when video is not live).
+    // Idle refresh keeps its classic any-time behavior.
+    rfsh_bg = &idle && (noreq | help_g) && rfsh_br;
     prog_bg = pre_br & !rfshing;
     if( rfshing ) begin
         bg=0;
     end else begin
-        if( BAPRIO ) begin
+        if( BA2_PRIO ) begin
+            casez( br ) // Deadline-bound tile bank first, then 0>1>3
+                4'b?1??: bg=4'b0100;
+                4'b?0?1: bg=4'b0001;
+                4'b?010: bg=4'b0010;
+                4'b1000: bg=4'b1000;
+                default: bg=0;
+            endcase
+        end else if( BAPRIO ) begin
             casez( br ) // Bank requests have priority (eases timing)
                 4'b???1: bg=4'b0001;
                 4'b??10: bg=4'b0010;

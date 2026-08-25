@@ -43,6 +43,7 @@ module jtframe_board_sdram #(
     input                   clk,
     output                  init,
     input                   prog_en,
+    input                   lhbl,     // used only with JTFRAME_RFSH_HBLANK
 
     input      [SDRAMW-1:0] ba0_addr,
     input      [SDRAMW-1:0] ba1_addr,
@@ -159,6 +160,15 @@ localparam
 
 wire rfsh, nc_rfsh;
 
+// Debt-forced refresh window. With JTFRAME_RFSH_HBLANK the forced (help)
+// refresh catch-up only interleaves with pending requests during horizontal
+// blanking, keeping the active-video tile fetch path free of refresh bursts.
+`ifdef JTFRAME_RFSH_HBLANK
+wire rfsh_win = ~lhbl;
+`else
+wire rfsh_win = 1'b1;
+`endif
+
 // Automatic JTFRAME macros set a 64us refresh period
 jtframe_frac_cen #(.WC(`JTFRAME_RFSH_WC)) u_rfsh(
     .clk    ( clk               ),
@@ -254,6 +264,9 @@ jtframe_frac_cen #(.WC(`JTFRAME_RFSH_WC)) u_rfsh(
         .PROG_LEN     ( PROG_LEN      ),
         .MISTER       ( MISTER        ),
         .HF           ( HF            ),
+`ifdef JTFRAME_BA2_PRIO
+        .BA2_PRIO     ( 1             ),
+`endif
 `ifdef JTFRAME_SDRAM96
         .SHIFTED      ( 0             )
 `else
@@ -312,7 +325,8 @@ jtframe_frac_cen #(.WC(`JTFRAME_RFSH_WC)) u_rfsh(
         .sdram_cke  ( sdram_cke     ),
 
         .dout       ( dout          ),
-        .rfsh       ( rfsh          )
+        .rfsh       ( rfsh          ),
+        .rfsh_win   ( rfsh_win      )
     );
 `ifdef SIMULATION
     jtframe_romrq_rdy_check u_rdy_check(
