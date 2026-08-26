@@ -64,6 +64,12 @@ module jtframe_dwnld #(
 
     output reg           prom_we,
     output reg           header,
+    // Hardware-visible count of download words silently discarded because the
+    // internal FIFO was full. Saturates at 255. Any non-zero value after a
+    // ROM load means SDRAM contents are corrupt (see the strip-diagnostic
+    // overlay in the Escape Kids target). Costs ~9 registers; always present
+    // so no ifdef divergence between diagnostic and release builds.
+    output reg [ 7:0]    ovfl_cnt = 8'd0,
     input                sdram_ack
 );
 
@@ -246,6 +252,13 @@ integer fifo_ovfl = 0;
 always @(posedge clk) if( new_word && fifo_full && !(slot_free && fifo_empty) )
     fifo_ovfl <= fifo_ovfl + 1;
 `endif
+
+// Same drop condition as the simulation counter above, kept in hardware so
+// real boards can report it (fifo_full implies !fifo_empty, so the guard
+// reduces to new_word && fifo_full).
+always @(posedge clk)
+    if( new_word && fifo_full && ovfl_cnt != 8'hff )
+        ovfl_cnt <= ovfl_cnt + 8'd1;
 
 task issue_from_fifo; begin
     { prog_addr, data_out, prog_mask, prog_ba } <= fifo_dout;

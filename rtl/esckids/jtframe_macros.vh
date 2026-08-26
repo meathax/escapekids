@@ -67,6 +67,10 @@
 `define JTFRAME_DIALEMU_LEFT 5
 `define JTFRAME_RELEASE
 `define JTFRAME_DEBUG_VPOS 0
+// Strip-diagnostic overlay build: on-screen late-fetch/drop counters and
+// per-line markers (see escape_kids_strip_diag.sv). DIAGNOSTIC ONLY -
+// remove this define (and its QSF twin) before any release build.
+`define ESCKIDS_STRIP_DIAG
 `define JTKCPU_DEBUG
 `define GAME_ROM_LEN 26'h6E0000
 

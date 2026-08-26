@@ -95,6 +95,9 @@ set_global_assignment -name VERILOG_MACRO "JTFRAME_DIALEMU_LEFT=5"
 set_global_assignment -name VERILOG_MACRO "JTFRAME_RELEASE"
 set_global_assignment -name VERILOG_MACRO "JTFRAME_DEBUG_VPOS=0"
 set_global_assignment -name VERILOG_MACRO "GAME_ROM_LEN=26'h6E0000"
+# DIAGNOSTIC ONLY - strip-root-cause overlay; remove before any release build
+# (mirror of the define in rtl/esckids/jtframe_macros.vh)
+set_global_assignment -name VERILOG_MACRO "ESCKIDS_STRIP_DIAG"
 
 #enable it only if 8bit indexed mode is used in core
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB_PALETTE=1"

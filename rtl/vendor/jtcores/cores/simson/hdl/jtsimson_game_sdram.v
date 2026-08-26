@@ -126,6 +126,38 @@ jtframe_rsthold u_hold(
 `endif
 );
 /* verilator tracing_on */
+// Escape Kids strip-diagnostic: intercept the game's RGB so the overlay can
+// be muxed onto it. With the macro off, the wires pass straight through.
+wire [`JTFRAME_COLORW-1:0] game_red, game_green, game_blue;
+wire [ 7:0] dwn_ovfl_cnt;
+`ifdef ESCKIDS_STRIP_DIAG
+escape_kids_strip_diag #(.COLORW(`JTFRAME_COLORW)) u_strip_diag(
+    .clk        ( clk           ),
+    .rst        ( rst           ),
+    .pxl_cen    ( pxl_cen       ),
+    .ena        ( ~ioctl_rom    ),
+    .lyrf_addr  ( lyrf_addr     ),
+    .lyra_addr  ( lyra_addr     ),
+    .lyrb_addr  ( lyrb_addr     ),
+    .lyrf_cs    ( lyrf_cs       ),
+    .lyra_cs    ( lyra_cs       ),
+    .lyrb_cs    ( lyrb_cs       ),
+    .lyrf_ok    ( lyrf_ok       ),
+    .lyra_ok    ( lyra_ok       ),
+    .lyrb_ok    ( lyrb_ok       ),
+    .ovfl_cnt   ( dwn_ovfl_cnt  ),
+    .LHBL       ( LHBL          ),
+    .LVBL       ( LVBL          ),
+    .game_r     ( game_red      ),
+    .game_g     ( game_green    ),
+    .game_b     ( game_blue     ),
+    .red        ( red           ),
+    .green      ( green         ),
+    .blue       ( blue          )
+);
+`else
+assign { red, green, blue } = { game_red, game_green, game_blue };
+`endif
 jtsimson_game u_game(
     .rst        ( rst_h     ),
     .clk        ( clk       ),
@@ -150,9 +182,9 @@ jtsimson_game u_game(
 
     .pxl2_cen       ( pxl2_cen      ),
     .pxl_cen        ( pxl_cen       ),
-    .red            ( red           ),
-    .green          ( green         ),
-    .blue           ( blue          ),
+    .red            ( game_red      ),
+    .green          ( game_green    ),
+    .blue           ( game_blue     ),
     .LHBL           ( LHBL          ),
     .LVBL           ( LVBL          ),
     .HS             ( HS            ),
@@ -364,6 +396,7 @@ jtframe_dwnld #(
     .prog_ba      ( prog_ba        ),
     .prom_we      ( prom_we        ),
     .header       ( header         ),
+    .ovfl_cnt     ( dwn_ovfl_cnt   ),
     .sdram_ack    ( prog_ack       )
 );
 
