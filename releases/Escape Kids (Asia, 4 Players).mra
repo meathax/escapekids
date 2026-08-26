@@ -12,7 +12,7 @@
     <rbf>Arcade-EscapeKids</rbf>
     <joystick>8</joystick>
     <region>Asia</region>
-    <rom index="0" address="0x30000000" zip="esckids.zip" md5="none">
+    <rom index="0" zip="esckids.zip" md5="none">
         <!-- Escape Kids loader header: GX975 profile, Asia four-player cabinet. -->
         <part>03 00 00 00</part>
         <!-- Main 053248 program: stream 0x000000-0x01ffff. -->
