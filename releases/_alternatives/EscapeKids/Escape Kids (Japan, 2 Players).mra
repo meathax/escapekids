@@ -12,11 +12,20 @@
     <rbf>Arcade-EscapeKids</rbf>
     <joystick>8</joystick>
     <region>Japan</region>
-    <rom index="0" zip="esckids.zip" md5="none">
+    <rom index="0" zip="esckidsj.zip|esckids.zip" md5="none">
         <!-- Escape Kids loader header: GX975 profile, Japan two-player cabinet. -->
         <part>03 01 00 00</part>
-        <!-- Main 053248 program: stream 0x000000-0x01ffff. -->
-        <part name="esckidsj/975r01" crc="7b5c5572"/>
+        <!-- Main 053248 program: stream 0x000000-0x01ffff. esckidsj is a clone
+             of esckids, so a split (non-merged) esckidsj.zip carries this file
+             at its own root as "975r01"; only a merged set nests it under
+             "esckidsj/". The loader commits to one zip for the whole <rom>
+             block by file existence alone (no per-part fallback), so this one
+             clone-only file cannot resolve correctly from both layouts with a
+             single path - split is listed first as the common case. A
+             merged-set-only user missing a standalone esckidsj.zip will get a
+             corrupt CPU ROM here; extract esckidsj/* from the merged
+             esckids.zip into its own esckidsj.zip to fix it. -->
+        <part name="975r01" crc="7b5c5572"/>
         <part repeat="0x60000">00</part>
         <!-- Z80 program: stream 0x080000-0x08ffff. -->
         <part name="975f02" crc="994fb229"/>
@@ -38,9 +47,10 @@
             <part name="975c07" crc="97ec541e" map="21000000"/>
         </interleave>
     </rom>
-    <!-- Default 93C46 image; persistent NVRAM remains at MiSTer index 2. -->
-    <rom index="2" zip="esckids.zip" md5="none">
-        <part name="esckidsj/esckidsj.nv" crc="985e2a2d"/>
+    <!-- Default 93C46 image; persistent NVRAM remains at MiSTer index 2.
+         Same split-vs-merged path caveat as the program ROM above. -->
+    <rom index="2" zip="esckidsj.zip|esckids.zip" md5="none">
+        <part name="esckidsj.nv" crc="985e2a2d"/>
     </rom>
     <nvram index="2" size="128"/>
     <buttons names="Run,Super Jump,Auto Run,Start,Coin,Service,Test" default="A,B,X,Start,Select,L,R" count="3"/>

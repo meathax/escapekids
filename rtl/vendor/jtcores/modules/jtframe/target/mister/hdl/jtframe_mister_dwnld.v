@@ -273,6 +273,63 @@ reg [ 1:0] st;
 reg        next_wr;
 reg [ 5:0] timeout;
 
+// The st==3 timeout escape exists because header and PROM bytes never pulse
+// prog_rdy, but each escape taken on an SDRAM-bound byte issues a word with
+// no matching completion: the sender then paces 1:1 with prog_rdy pulses that
+// belong to older queued words, so the queue inside jtframe_dwnld keeps that
+// extra entry forever. This ratchets across the WHOLE download, not just
+// within one stall: every isolated small refresh burst that forces even one
+// escape adds a permanent +1, and it takes many such bursts spread over a
+// long transfer to walk the 64-entry FIFO into overflow (measured: loss
+// starts past byte 7987 of 65536 under a realistic 220-cycle-stall/900
+// profile). A counter that forgets the debt as soon as anything else
+// completes (tried: reset-on-any-prog_rdy "streak" counter) fails to catch
+// this - unrelated completions keep resetting it well before the slow
+// cross-download accumulation reaches a dangerous level, so it converges to
+// the unpatched loss figure. The counter must track net outstanding escapes
+// across the whole transfer: +1 per escape actually taken on an SDRAM-bound
+// byte, -1 per real prog_rdy completion, gating further SDRAM-bound escapes
+// once CREDIT_MAX outstanding are already unmatched.
+//
+// Escape is only credit-gated for SDRAM-bound bytes: header/PROM bytes never
+// pulse prog_rdy at all, so gating their escape on the same counter would
+// deadlock the loader forever the moment credit is ever left non-zero when
+// that segment is reached (observed on hardware as a boot that never leaves
+// a black screen until the next, differently-timed, download attempt
+// happens not to saturate credit at the same point) - their escape stays
+// unconditional, as it always was, by construction: sdram_byte is false
+// there, so the gate term folds away and credit is never touched by them.
+localparam [26:0] DWN_HEADER =
+    `ifdef JTFRAME_HEADER `JTFRAME_HEADER `else 27'd0 `endif ;
+localparam [26:0] DWN_PROM_END =
+    `ifdef JTFRAME_PROM_START (`JTFRAME_PROM_START+DWN_HEADER) `else ~27'd0 `endif ;
+localparam [5:0] CREDIT_MAX = 6'd48; // < 64-entry FIFO in jtframe_dwnld
+
+reg  [ 5:0] credit;
+wire        sdram_byte  = dump_cnt >= DWN_HEADER && dump_cnt < DWN_PROM_END;
+wire        credit_ok   = credit < CREDIT_MAX;
+// New ROM download starting (not merely the next DDR page of the same
+// download): the counter must not carry stale credit across separate loads,
+// only across pages within one load.
+wire        dwn_restart = hps_download && (is_rom || is_cart) && !last_dwn && game_rom;
+wire        sent_byte   = st==2'd3 && (prog_rdy || (&timeout && (!sdram_byte || credit_ok)));
+
+always @(posedge clk, posedge rst) begin
+    if( rst ) begin
+        credit <= 0;
+    end else if( dwn_restart ) begin
+        credit <= 0;
+    end else begin
+        // Counts persist across DDR pages: queued words from the previous
+        // page may still be draining when the next page starts sending.
+        case( {sent_byte && sdram_byte, prog_rdy && credit!=0} )
+            2'b10: credit <= credit + 1'd1;
+            2'b01: credit <= credit - 1'd1;
+            default: ;
+        endcase
+    end
+end
+
 // Send to core
 always @(posedge clk, posedge rst) begin
     if( rst ) begin
@@ -296,7 +353,7 @@ always @(posedge clk, posedge rst) begin
             timeout <= st==2'd2 ? 5'd0 : (timeout+1'd1);
             case( st )
                 default: st <= st+1'd1;
-                3: if( prog_rdy || (&timeout) ) begin
+                3: if( sent_byte ) begin
                     dump_ser <= dump_ser>>8;
                     dump_cnt <= dump_cnt+1'd1;
                     st <= &dump_cnt[2:0] ? 2'd0 : 2'd1;
