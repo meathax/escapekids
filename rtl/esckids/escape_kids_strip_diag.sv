@@ -41,26 +41,11 @@ module escape_kids_strip_diag #(parameter COLORW=8)(
     input                     lyrf_ok, lyra_ok, lyrb_ok,
     // download drop count from jtframe_dwnld
     input        [ 7:0]       ovfl_cnt,
-    // download stream tap (checksum A): raw ioctl bytes bound for SDRAM
-    input                     ioctl_wr, ioctl_rom, header,
-    input        [26:0]       ioctl_addr,
-    input        [ 7:0]       ioctl_dout,
-    // write-transaction tap (checksum B): what the loader hands the controller
-    input                     prog_we, prog_ack,
-    input        [21:0]       prog_addr,
-    input        [15:0]       prog_data,
-    input        [ 1:0]       prog_mask, prog_ba,
     // video pass-through
     input                     LHBL, LVBL,
     input  [COLORW-1:0]       game_r, game_g, game_b,
     output reg [COLORW-1:0]   red, green, blue
 );
-
-// PROM boundary: bytes at/above it bypass the SDRAM write path
-localparam [26:0] DIAG_HEADER =
-    `ifdef JTFRAME_HEADER `JTFRAME_HEADER `else 27'd0 `endif ;
-localparam [26:0] DIAG_PROM_END =
-    `ifdef JTFRAME_PROM_START (`JTFRAME_PROM_START+DIAG_HEADER) `else ~27'd0 `endif ;
 
 localparam [COLORW-1:0] BRT = {COLORW{1'b1}},
                         DIM = {COLORW{1'b1}} >> 3; // dim placeholder for 0 bits
@@ -137,57 +122,6 @@ always @(posedge clk) begin
     end
 end
 
-// ---------------------------------------------------------------- checksums
-// Fletcher-style running sums (mod 2^16), order-sensitive, trivially
-// replicated offline:  sum1' = sum1 + w;  sum2' = sum2 + sum1'.
-//
-// A: every SDRAM-bound download byte at the ioctl boundary (word = the byte,
-//    zero-extended). Golden value computable in Python straight from the
-//    emitted MRA stream (index0.bin): skip the header bytes and everything at
-//    or beyond the PROM offset, fold the rest in order.
-// B: every write transaction the loader hands the controller, folded as three
-//    16-bit words per accepted transaction (ack cycle):
-//      w0 = prog_addr[15:0]
-//      w1 = {prog_ba, prog_mask, 6'd0, prog_addr[21:16]}
-//      w2 = prog_data
-//    Golden value from the validated Icarus loader+controller replay of the
-//    same stream.
-// Both freeze automatically: A's gate needs ioctl_rom, B's needs prog_we,
-// and neither is active after the download completes.
-reg [15:0] a_sum1, a_sum2, b_sum1, b_sum2;
-reg [15:0] a_count;                 // low 16 bits of SDRAM-bound byte count
-
-wire        a_byte  = ioctl_wr && ioctl_rom && !header &&
-                      ioctl_addr >= DIAG_HEADER && ioctl_addr < DIAG_PROM_END;
-wire        b_txn   = prog_we && prog_ack;
-wire [15:0] b_w1    = {prog_ba, prog_mask, 6'd0, prog_addr[21:16]};
-
-// three-word fold for B, done in one cycle with intermediate carries dropped
-// at 16 bits, matching the offline replication exactly
-wire [15:0] b_s1a = b_sum1 + prog_addr[15:0];
-wire [15:0] b_s2a = b_sum2 + b_s1a;
-wire [15:0] b_s1b = b_s1a + b_w1;
-wire [15:0] b_s2b = b_s2a + b_s1b;
-wire [15:0] b_s1c = b_s1b + prog_data;
-wire [15:0] b_s2c = b_s2b + b_s1c;
-
-always @(posedge clk) begin
-    if( rst ) begin
-        a_sum1 <= 0; a_sum2 <= 0; a_count <= 0;
-        b_sum1 <= 0; b_sum2 <= 0;
-    end else begin
-        if( a_byte ) begin
-            a_sum1  <= a_sum1 + {8'd0, ioctl_dout};
-            a_sum2  <= a_sum2 + a_sum1 + {8'd0, ioctl_dout};
-            a_count <= a_count + 16'd1;
-        end
-        if( b_txn ) begin
-            b_sum1 <= b_s1c;
-            b_sum2 <= b_s2c;
-        end
-    end
-end
-
 // ---------------------------------------------------------------- position
 reg [8:0] xcnt;
 reg [8:0] ycnt;
@@ -203,49 +137,29 @@ end
 
 // ---------------------------------------------------------------- overlay
 // Row select for the counter block: 4px-tall rows on an 8px pitch.
-// X origin is 12 because the presentation crop removes the leftmost 12
-// pixels on hardware; blocks at x12..x43 land at screen x0..x31 with all
-// eight bits visible (measured on hardware captures, 2026-08-26).
-/* verilator lint_off UNUSEDSIGNAL */ // only [4:2] used: block index bits
-wire [8:0] xrel     = xcnt - 9'd12;
-/* verilator lint_on UNUSEDSIGNAL */
-wire       in_block = LVBL && LHBL && xcnt >= 9'd12 && xcnt < 9'd44 &&
-                      ycnt >= 9'd4 && ycnt < 9'd124 && ycnt[2];
-wire [3:0] blk_row  = ycnt[6:3];          // 0..14 within the block region
-wire [2:0] blk_bit  = 3'd7 - xrel[4:2];   // MSB leftmost
+wire       in_block = LVBL && LHBL && xcnt < 9'd32 && ycnt >= 9'd4 && ycnt < 9'd40 && ycnt[2];
+wire [2:0] blk_row  = ycnt[5:3];          // 0..4 within the block region
+wire [2:0] blk_bit  = 3'd7 - xcnt[4:2];   // MSB leftmost
 reg  [7:0] row_val;
 reg  [2:0] row_hue;                       // {r,g,b} enables
 
 always @* begin
     case( blk_row )
-        4'd0:    begin row_val = ovfl_cnt;      row_hue = 3'b110; end // yellow
-        4'd1:    begin row_val = b_late;        row_hue = 3'b100; end // red
-        4'd2:    begin row_val = a_late;        row_hue = 3'b010; end // green
-        4'd3:    begin row_val = f_late;        row_hue = 3'b011; end // cyan
-        4'd4:    begin row_val = b_maxlat;      row_hue = 3'b101; end // magenta
-        // checksum A (stream): white rows, sum2 MSB first
-        4'd5:    begin row_val = a_sum2[15:8];  row_hue = 3'b111; end
-        4'd6:    begin row_val = a_sum2[ 7:0];  row_hue = 3'b111; end
-        4'd7:    begin row_val = a_sum1[15:8];  row_hue = 3'b111; end
-        4'd8:    begin row_val = a_sum1[ 7:0];  row_hue = 3'b111; end
-        // checksum B (write transactions): yellow rows
-        4'd9:    begin row_val = b_sum2[15:8];  row_hue = 3'b110; end
-        4'd10:   begin row_val = b_sum2[ 7:0];  row_hue = 3'b110; end
-        4'd11:   begin row_val = b_sum1[15:8];  row_hue = 3'b110; end
-        4'd12:   begin row_val = b_sum1[ 7:0];  row_hue = 3'b110; end
-        // SDRAM-bound byte count, low 16 bits: green rows
-        4'd13:   begin row_val = a_count[15:8]; row_hue = 3'b010; end
-        default: begin row_val = a_count[ 7:0]; row_hue = 3'b010; end
+        3'd0:    begin row_val = ovfl_cnt; row_hue = 3'b110; end // yellow
+        3'd1:    begin row_val = b_late;   row_hue = 3'b100; end // red
+        3'd2:    begin row_val = a_late;   row_hue = 3'b010; end // green
+        3'd3:    begin row_val = f_late;   row_hue = 3'b011; end // cyan
+        default: begin row_val = b_maxlat; row_hue = 3'b101; end // magenta
     endcase
 end
 
 wire        bit_on  = row_val[blk_bit];
-wire        in_tick = LVBL && LHBL && xcnt >= 9'd12 && xcnt < 9'd18 && ycnt >= 9'd128;
-wire [2:0]  tick_hue = xcnt < 9'd14 ? 3'b100 :       // lyrb -> red
-                       xcnt < 9'd16 ? 3'b010 :       // lyra -> green
-                                      3'b011;        // lyrf -> cyan
-wire        tick_on  = xcnt < 9'd14 ? b_disp :
-                       xcnt < 9'd16 ? a_disp : f_disp;
+wire        in_tick = LVBL && LHBL && xcnt < 9'd6 && ycnt >= 9'd44;
+wire [2:0]  tick_hue = xcnt < 9'd2 ? 3'b100 :        // lyrb -> red
+                       xcnt < 9'd4 ? 3'b010 :        // lyra -> green
+                                     3'b011;         // lyrf -> cyan
+wire        tick_on  = xcnt < 9'd2 ? b_disp :
+                       xcnt < 9'd4 ? a_disp : f_disp;
 
 always @* begin
     red   = game_r;
