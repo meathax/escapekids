@@ -154,8 +154,16 @@ end
 //    same stream.
 // Both freeze automatically: A's gate needs ioctl_rom, B's needs prog_we,
 // and neither is active after the download completes.
-reg [15:0] a_sum1, a_sum2, b_sum1, b_sum2;
-reg [15:0] a_count;                 // low 16 bits of SDRAM-bound byte count
+// CRITICAL: these must NOT be cleared by the game reset - the game is held
+// in reset for the entire ROM download, so an rst-cleared accumulator wipes
+// itself continuously and freezes at zero (observed on hardware). Power-on
+// initialisation plus a clear on the download's own start edge is the
+// correct lifetime.
+/* verilator lint_off PROCASSINIT */ // power-up init + procedural update is intended
+reg [15:0] a_sum1 = 0, a_sum2 = 0, b_sum1 = 0, b_sum2 = 0;
+reg [15:0] a_count = 0;             // low 16 bits of SDRAM-bound byte count
+reg        rom_l   = 0;             // ioctl_rom edge detect
+/* verilator lint_on PROCASSINIT */
 
 wire        a_byte  = ioctl_wr && ioctl_rom && !header &&
                       ioctl_addr >= DIAG_HEADER && ioctl_addr < DIAG_PROM_END;
@@ -172,7 +180,9 @@ wire [15:0] b_s1c = b_s1b + prog_data;
 wire [15:0] b_s2c = b_s2b + b_s1c;
 
 always @(posedge clk) begin
-    if( rst ) begin
+    rom_l <= ioctl_rom;
+    if( ioctl_rom && !rom_l ) begin
+        // new download starting: fresh accumulators
         a_sum1 <= 0; a_sum2 <= 0; a_count <= 0;
         b_sum1 <= 0; b_sum2 <= 0;
     end else begin
