@@ -17,7 +17,7 @@
     Date: 24-7-2023 */
 
 module jtsimson_obj #(parameter
-    RAMW      = 12, // 12 -> 8kB
+    RAMW      = 12, // 12 -> 2048 x 16-bit words = 4 KiB
     PACKED    = 1,
     SHADOW    = 0,
     K55673    = 0,
@@ -226,7 +226,7 @@ jtframe_objdraw #(
 jtframe_dual_nvram16 #(
     .AW     ( RAMW    ),
     .SIMFILE("obj.bin")
-) u_ram( // 8 or 16kB? check PCB. Game seems to work on 8kB ok
+) u_ram( // K053246 logical object store; GX975 maps 0x2000-0x2fff
     // Port 0 - CPU access
     .clk0   ( clk       ),
     .data0  ( ram_din   ),
