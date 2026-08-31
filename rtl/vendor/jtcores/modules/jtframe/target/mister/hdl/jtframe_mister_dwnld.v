@@ -144,7 +144,6 @@ reg  [  26:0] dump_cnt;
 wire [  63:0] dump_data;
 reg  [  63:0] dump_ser;
 reg           tx_start, tx_done;
-reg           game_rom, game_cart;
 wire          buffer_we;
 
 jtframe_rpwp_ram #(.DW(64),.AW(BW)) u_buffer(
@@ -166,15 +165,16 @@ assign hps_wait = ddr_dwn;
 assign is_rom   = hps_index[5:0]==IDX_ROM;
 assign is_cart  = hps_index[5:0]==IDX_CART;
 assign is_nvram = hps_index[5:0]==IDX_NVRAM;
+wire dwn_restart = hps_download && (is_rom || is_cart) && !last_dwn;
 
 // download signals mux — registered to break long combinational path
 // from ddr_dwn through jtframe_dwnld (Add0 → LessThan3 → Selector9 → Add1 → prog_addr)
 always @(posedge clk) begin
     ioctl_wr   <= ddr_dwn ? dump_we :
-                             hps_wr && (game_rom || is_nvram);
+                             hps_wr && (is_rom || is_cart || is_nvram);
     ioctl_dout <= ddr_dwn ? dump_ser[7:0] : hps_dout;
     ioctl_addr <= ddr_dwn ? dump_cnt :
-                 game_cart ? hps_addr + CART_OFFSET : hps_addr;
+                 is_cart ? hps_addr + CART_OFFSET : hps_addr;
 end
 
 // Detect DDR download start and stop conditions
@@ -182,11 +182,10 @@ always @(posedge clk, posedge rst) begin
     if( rst ) begin
         wr_latch    <= 0;
         last_dwn    <= 0;
+        last_dwnbusy<= 0;
         ddr_dwn     <= 0;
         ioctl_rom   <= 0;
         ddr_len     <= 27'd0;
-        game_rom    <= 0;
-        game_cart   <= 0;
         ioctl_ram   <= 0;
         ioctl_cheat <= 0;
         ioctl_lock  <= 0;
@@ -198,13 +197,11 @@ always @(posedge clk, posedge rst) begin
         ioctl_cart   <=  hps_download && is_cart;
         ioctl_ram    <= (hps_download && is_nvram) || hps_upload;
         last_dwnbusy <= dwnld_busy;
-        game_rom     <= is_rom || is_cart;
-        game_cart    <= is_cart;
-        if( hps_download && (is_rom  || is_cart) && !last_dwn && game_rom) begin
+        if( hps_download && (is_rom  || is_cart) && !last_dwn ) begin
             ioctl_rom <= is_rom;
             wr_latch  <= 0;
         end else begin
-            if( hps_wr && game_rom ) wr_latch <= 1;
+            if( hps_wr && (is_rom || is_cart) ) wr_latch <= 1;
         end
         if( !hps_download && last_dwn && ioctl_rom ) begin
             if( wr_latch )
@@ -227,19 +224,25 @@ end
 localparam PW = 29-4-BW;
 
 reg [PW-1:0] ddram_page;
+reg ddram_wait;         // declared before use so Icarus can elaborate this
 
 assign ddram_burstcnt = 8'h1 << BW; // 128*8=1024
 assign ddram_addr = { 4'd3, ddram_page, {BW{1'b0}} };
 assign buffer_we  = ddram_wait;
 
 wire cnt_over = &ddram_cnt;
-reg ddram_wait;
 
 always @(posedge clk, posedge rst) begin
     if( rst ) begin
         ddram_cnt  <= 0;
         ddram_page <= 0;
         ddram_wait <= 0;
+        tx_start   <= 0;
+    end else if( dwn_restart ) begin
+        ddram_cnt  <= 0;
+        ddram_page <= 0;
+        ddram_wait <= 0;
+        ddram_rd   <= 0;
         tx_start   <= 0;
     end else if(!ddram_busy ) begin
         if( ddr_dwn  ) begin
@@ -311,7 +314,6 @@ wire        credit_ok   = credit < CREDIT_MAX;
 // New ROM download starting (not merely the next DDR page of the same
 // download): the counter must not carry stale credit across separate loads,
 // only across pages within one load.
-wire        dwn_restart = hps_download && (is_rom || is_cart) && !last_dwn && game_rom;
 wire        sent_byte   = st==2'd3 && (prog_rdy || (&timeout && (!sdram_byte || credit_ok)));
 
 always @(posedge clk, posedge rst) begin
@@ -333,6 +335,13 @@ end
 // Send to core
 always @(posedge clk, posedge rst) begin
     if( rst ) begin
+        tx_done  <= 1;
+        dump_cnt <= 27'd0;
+        dump_we  <= 0;
+        dump_ser <= 64'd0;
+        st       <= 2'd0;
+        timeout  <= 5'd0;
+    end else if( dwn_restart ) begin
         tx_done  <= 1;
         dump_cnt <= 27'd0;
         dump_we  <= 0;
