@@ -144,8 +144,18 @@ wire        all_act, rfshing, rfsh_br, noreq, help;
 // engines stop launching new transactions while their help input is high,
 // so the raw help signal must never be visible to them outside the window
 // or the whole bus starves without any refresh running.
-wire        help_g;
-assign      help_g = help & (rfsh_win | prog_en);
+wire        help_g, noreq_g;
+assign      help_g  = help  & (rfsh_win | prog_en);
+// Escape Kids: the classic "noreq" idle-refresh path used to fire any time
+// all banks briefly had nothing queued, including mid-active-video, and
+// could still steal the bus from a bank-2 tile fetch arriving right after
+// (bg is forced 0 for every bank while rfshing). Bank-2 measured a 159-clk
+// service latency against its 64-clk budget on real hardware with
+// JTFRAME_BA2_PRIO already active, i.e. priority alone does not protect a
+// request that loses the race to an already-started refresh. Gate noreq the
+// same way help_g already is, so idle refresh gets the same hblank-confined
+// treatment as debt-forced refresh.
+assign      noreq_g = noreq & (rfsh_win | prog_en);
 reg         all_dbusy, all_dbusy64;
 reg   [3:0] bg, cmd;
 reg  [14:0] prio_lfsr;
@@ -561,7 +571,7 @@ always @(*) begin
     // "help" path and a saturated write stream can starve it completely.
     // SDRAM rows still need refreshing while the download runs, so make
     // refresh eligible at every all-idle window while prog_en is asserted.
-    rfsh_bg = &idle && (noreq | help_g | prog_en) && rfsh_br;
+    rfsh_bg = &idle && (noreq_g | help_g | prog_en) && rfsh_br;
     prog_bg = pre_br & !rfshing;
     if( rfshing ) begin
         bg=0;

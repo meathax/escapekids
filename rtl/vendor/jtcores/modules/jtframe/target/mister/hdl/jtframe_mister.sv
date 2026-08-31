@@ -529,7 +529,7 @@ escape_kids_hps_io #(
     .ioctl_dout      ( hps_dout       ),
     .ioctl_din       ( hps_din        ),
     .ioctl_index     ( hps_index      ),
-    .ioctl_wait      ( hps_wait     | sd_wait  ),
+    .ioctl_wait      ( hps_wait | prog_we | sd_wait ),
     .ioctl_upload    ( hps_upload     ),
     // NVRAM support
     .ioctl_rd        (                ), // no need

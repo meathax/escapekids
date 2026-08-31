@@ -1,48 +1,50 @@
-// Optional mute for the Escape Kids "one, two" character voice samples.
-//
-// The main CPU sends sound requests as a single byte written to the K053260
-// host port at 0x3fd6/0x3fd7, followed by a write to 0x3fd4 that raises the
-// sound-CPU IRQ.  Sound-test entries 60 and 62 are the two "one"/"two" voice
-// calls, so muting them is a request-level filter: the command byte is
-// replaced by 0 and the IRQ that would make the Z80 act on it is withheld.
-// Every other request, and all mixing/volume behaviour, is untouched.
-
-`ifndef ESCAPE_KIDS_VOICE_MUTE_INCLUDED
-`define ESCAPE_KIDS_VOICE_MUTE_INCLUDED
-
 module escape_kids_voice_mute #(
-    parameter [7:0] CODE0 = 8'd60,
-    parameter [7:0] CODE1 = 8'd62
+    parameter [20:0] START_ONE = 21'h734ed,
+    parameter [20:0] START_TWO = 21'h6c3b0
 )(
-    input            clk,
-    input            rst,
-    input            enable,      // core is Escape Kids and the OSD option is on
-    input            snd_wr,      // main CPU write strobe to the K053260 host port
-    input      [7:0] din,         // main CPU data bus
-    output     [7:0] dout,        // data presented to the sound section
-    input            snd_irq_in,
-    output           snd_irq_out
+    input             clk,
+    input             rst,
+    input             enable,
+    input      [ 3:0] channel_bsy,
+    input      [20:0] ch0_start,
+    input      [20:0] ch1_start,
+    input      [20:0] ch2_start,
+    input      [20:0] ch3_start,
+    input      [ 3:0] channel_en,
+    output     [ 3:0] channel_en_out
 );
 
-wire hit = enable && (din == CODE0 || din == CODE1);
-reg  pending, irq_l;
+wire [3:0] start_hit = {
+    ch3_start == START_ONE || ch3_start == START_TWO,
+    ch2_start == START_ONE || ch2_start == START_TWO,
+    ch1_start == START_ONE || ch1_start == START_TWO,
+    ch0_start == START_ONE || ch0_start == START_TWO
+};
 
-assign dout        = (snd_wr && hit) ? 8'h00 : din;
-assign snd_irq_out = snd_irq_in && !(enable && pending);
+reg [3:0] bsy_l, muted;
+wire [3:0] rising_hit = {4{enable}} & channel_bsy & ~bsy_l & start_hit;
+
+assign channel_en_out = channel_en & ~(muted | rising_hit);
 
 always @(posedge clk) begin
     if( rst ) begin
-        pending <= 1'b0;
-        irq_l   <= 1'b0;
+        bsy_l <= 4'd0;
+        muted <= 4'd0;
     end else begin
-        irq_l <= snd_irq_in;
-        // The request is armed by the command write and consumed by the IRQ
-        // pulse that follows it, so a blocked code cannot gate a later one.
-        if( snd_wr )                    pending <= hit;
-        else if( irq_l && !snd_irq_in ) pending <= 1'b0;
+        bsy_l <= channel_bsy;
+        if( !enable ) begin
+            muted <= 4'd0;
+        end else begin
+            if( !channel_bsy[0] ) muted[0] <= 1'b0;
+            else if( !bsy_l[0] )  muted[0] <= start_hit[0];
+            if( !channel_bsy[1] ) muted[1] <= 1'b0;
+            else if( !bsy_l[1] )  muted[1] <= start_hit[1];
+            if( !channel_bsy[2] ) muted[2] <= 1'b0;
+            else if( !bsy_l[2] )  muted[2] <= start_hit[2];
+            if( !channel_bsy[3] ) muted[3] <= 1'b0;
+            else if( !bsy_l[3] )  muted[3] <= start_hit[3];
+        end
     end
 end
 
 endmodule
-
-`endif

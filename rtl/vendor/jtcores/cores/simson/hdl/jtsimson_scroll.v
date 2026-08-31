@@ -152,7 +152,24 @@ end
 
 assign tile_dout = rmrd ? tilerom_dout : tilemap_dout;
 
-always @(posedge clk) cpu_rom_dtack <= ~(rmrd & gfx_cs) | lyra_ok;
+// CPU tile-ROM (rmrd) reads wait for lyra_ok. If that acknowledge never
+// arrives the CPU stalls on dtack forever and the machine freezes on
+// whatever frame was last drawn - observed on hardware as a boot that hangs
+// on the video test pattern. Bound the wait: 1023 clk48 is ~21us, far past
+// any legitimate service time (worst measured 324), so this only releases a
+// handshake that is already broken instead of hanging the core.
+// 65535 clk48 ~ 1.4 ms: longer than any legitimate wait (including the ROM
+// download window, when the CPU may legitimately see no acknowledge at all),
+// short enough that a real hang is invisible to the player.
+reg [15:0] rmrd_wait;
+wire      rmrd_stall = rmrd & gfx_cs & ~lyra_ok;
+
+always @(posedge clk) begin
+    if( rst || !rmrd_stall ) rmrd_wait <= 16'd0;
+    else if( !(&rmrd_wait) ) rmrd_wait <= rmrd_wait + 16'd1;
+end
+
+always @(posedge clk) cpu_rom_dtack <= ~(rmrd & gfx_cs) | lyra_ok | (&rmrd_wait);
 
 function [7:0] cgate( input [7:0] c);
     cgate = esckids ? { c[7:5], 5'd0 } :

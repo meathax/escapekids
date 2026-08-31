@@ -21,8 +21,8 @@ module jtsimson_game(
 );
 
 /* verilator tracing_off */
-wire [ 7:0] snd2main, video_dump, fm_dout, snd_cmd;
-wire        cpu_cen, snd_irq, snd_irq_mute, rmrd, rst8, init;
+wire [ 7:0] snd2main, video_dump, fm_dout;
+wire        cpu_cen, snd_irq, rmrd, rst8, init;
 wire        pal_we, pal_bank, fm_irqn,
             cpu_we, tilesys_cs, objsys_cs, pcu_cs, objcha_n;
 wire        cpu_rnw, cpu_irqn, cpu_firqn, cpu_nmin, dma_bsy, snd_wrn, mono, objreg_cs, main_fmcs;
@@ -335,20 +335,6 @@ jtsimson_main u_main(
     .dbg_eep_rdy    ( dbg_eep_rdy  )
 );
 
-/* verilator tracing_off */
-// Escape Kids OSD option: drop the "one, two" voice requests (sound-test
-// entries 60 and 62) before the sound section sees them.
-escape_kids_voice_mute u_voice_mute(
-    .clk        ( clk48         ),
-    .rst        ( rst48         ),
-    .enable     ( esckids && status[11] ),
-    .snd_wr     ( ~snd_wrn      ),
-    .din        ( cpu_dout      ),
-    .dout       ( snd_cmd       ),
-    .snd_irq_in ( snd_irq       ),
-    .snd_irq_out( snd_irq_mute  )
-);
-
 jtsimson_sound u_sound(
     .rst        ( rst48         ),
     .clk        ( clk48         ),
@@ -358,12 +344,13 @@ jtsimson_sound u_sound(
     .simson     ( simson        ),
     .suratk     ( suratk        ),
     // communication with main CPU
-    .snd_irq    ( snd_irq_mute  ),
-    .main_dout  ( snd_cmd       ),
+    .snd_irq    ( snd_irq       ),
+    .main_dout  ( cpu_dout      ),
     .main_din   ( snd2main      ),
     .main_addr  ( cpu_addr[0]   ),
     .main_rnw   ( snd_wrn       ),
     .mono       ( mono          ),
+    .voice_mute ( esckids && status[11] ),
     // YM2151 (only suratk)
     .main_fmcs  ( main_fmcs     ),
     .fm_dout    ( fm_dout       ),

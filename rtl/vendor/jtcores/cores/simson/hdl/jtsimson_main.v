@@ -130,6 +130,7 @@ wire [ 7:0] Aupper, hip_dout;
 reg  [ 7:0] cpu_din, port_in;reg  [ 3:0] bank;
 wire [15:0] A, pcbad;
 wire        buserror;
+wire        esckids_ctrl0_cs, esckids_ctrl2_cs, esckids_watchdog_cs;
 reg         ram_cs, banked_cs, io_cs, pal_cs, snd_cs,
             berr_l, prog_cs, eeprom_cs, joystk_cs,
             out_cs, basel_cs, cr_cs, stsw_cs, hip_cs,
@@ -165,8 +166,13 @@ reg  [ 7:0] hist_flags[0:15];
 wire accepted_cycle = cpu_cen & dtack & |{
     rom_cs, pal_cs, ram_cs, io_cs, eeprom_cs, objsys_cs, objreg_cs,
     pcu_cs, joystk_cs, basel_cs, out_cs, snd_cs, stsw_cs,
-    tilesys_cs, k053252_cs, objread_cs, cr_cs
+    tilesys_cs, k053252_cs, objread_cs, cr_cs,
+    esckids_ctrl0_cs, esckids_ctrl2_cs, esckids_watchdog_cs
 };
+
+assign esckids_ctrl0_cs    = esckids && A == 16'h3fd0;
+assign esckids_ctrl2_cs    = esckids && A == 16'h3fd2;
+assign esckids_watchdog_cs = esckids && A == 16'h3fda;
 
 assign dbg_pc           = cpu_pc;
 assign dbg_pcbad        = pcbad;
@@ -258,7 +264,18 @@ always @(posedge clk) begin
     end
 end
 
-assign dtack   = (~rom_cs | rom_ok) & tilesys_rom_dtack;
+// Same bound on the program-ROM handshake: a rom_ok that never arrives must
+// not be able to freeze the CPU permanently (observed as a black screen or a
+// frozen boot frame that only a core reload clears).
+reg [15:0] romwait;
+wire      rom_stall = rom_cs & ~rom_ok;
+
+always @(posedge clk) begin
+    if( rst || !rom_stall ) romwait <= 16'd0;
+    else if( !(&romwait) )  romwait <= romwait + 16'd1;
+end
+
+assign dtack   = ((~rom_cs | rom_ok) | (&romwait)) & tilesys_rom_dtack;
 assign ram_we  = ram_cs & cpu_we;
 assign snd_wrn = suratk ? ~cpu_we : ~(snd_cs & cpu_we);
 assign pal_we  = pal_cs & cpu_we;
@@ -280,9 +297,7 @@ end
 // Decoder 053327 after it, takes A[10:7] for generating
 // OBJCS, VRAMCS, CRAMCS, IOCS
 `ifdef SIMULATION
-wire escape_ctrl_cs = esckids && (A==16'h3fd0 || A==16'h3fd2 ||
-                                  A==16'h3fda);
-wire bad_cs =
+wire [4:0] bad_cs =
         { 3'd0, rom_cs     } +
         { 3'd0, pal_cs     } +
         { 3'd0, ram_cs     } +
@@ -301,14 +316,17 @@ wire bad_cs =
         { 3'd0, k053252_cs } +
         { 3'd0, objread_cs } +
         { 3'd0, cr_cs       } +
-        { 3'd0, escape_ctrl_cs } > 1;
+        { 3'd0, esckids_ctrl0_cs } +
+        { 3'd0, esckids_ctrl2_cs } +
+        { 3'd0, esckids_watchdog_cs };
 wire none_cs = ~|{ rom_cs, pal_cs, ram_cs, io_cs, objsys_cs, cr_cs,
     objreg_cs, pcu_cs, joystk_cs, tilesys_cs, eeprom_cs, basel_cs, out_cs,
-    snd_cs, snd_irq, stsw_cs, k053252_cs, objread_cs, escape_ctrl_cs };
+    snd_cs, snd_irq, stsw_cs, k053252_cs, objread_cs,
+    esckids_ctrl0_cs, esckids_ctrl2_cs, esckids_watchdog_cs };
 
 always @(posedge clk) begin
     if( !rst && esckids && dtack && u_cpu.u_memctrl.mem_en &&
-        bad_cs != 0 && bad_cs != 1 )
+        bad_cs > 1 )
         $error("Escape Kids decode is not one-hot: A=%04X count=%0d", A, bad_cs);
     if( !rst && esckids && dtack && u_cpu.u_memctrl.mem_en && none_cs )
         $error("Escape Kids accepted access has no chip select: A=%04X", A);
@@ -450,7 +468,7 @@ always @(*) begin
         // corresponding K052109 window, matching vendetta.cpp:405-436.
         ram_cs      = A[15:13]==3'b000;
         banked_cs   = !cpu_we && A[15:13]==3'b011;  // ROM reads only; writes access K052109 config
-        prog_cs     = A[15];
+        prog_cs     = !cpu_we && A[15];
         tilesys_cs  = A>=16'h2000 && A<=16'h5fff;
         objsys_cs   = video_bank && A[15:12]==4'h2;
         pal_cs      = video_bank && A[15:12]==4'h4;
@@ -470,16 +488,12 @@ always @(*) begin
         // decoded overlay is one-hot at the first control transaction.
         tilesys_cs  = tilesys_cs && !(joystk_cs || eeprom_cs || stsw_cs ||
                       objreg_cs || pcu_cs || k053252_cs || snd_irq ||
-                      snd_cs || objread_cs || A==16'h3fd0 ||
-                      A==16'h3fd2 || A==16'h3fda);
-        // The K052109 owns its own CPU memory mapper (REG_CFG bits 1:0).  It
-        // powers up with cfg=0, which places the register page at CPU
-        // 0x7C00-0x7FFF, i.e. OUTSIDE the 0x2000-0x5FFF window the mapper
-        // only reaches once cfg has been programmed.  Escape Kids writes
-        // 0x12 to 0x7C00 exactly once at boot (verified in MAME at
-        // PC=0x803F) to select that window.  Without this the register
-        // write never reaches the chip, cfg stays 0, every tile RAM chip
-        // select stays inactive and the whole tilemap is dropped.
+                      snd_cs || objread_cs || esckids_ctrl0_cs ||
+                      esckids_ctrl2_cs || esckids_watchdog_cs);
+        // The project board/ROM-trace evidence includes a boot write to
+        // 0x7C00. MAME esckids_map maps 0x6000-0x7FFF as banked ROM, so
+        // this alias is retained as hardware/ROM-trace evidence, not
+        // inferred from the MAME address map alone.
         // Writes only: 0x6000-0x7FFF is the banked program ROM for reads.
         if( cpu_we && A[15:10]==6'b011111 ) tilesys_cs = 1;
         io_cs       = 0;
@@ -568,12 +582,12 @@ always @(posedge clk) begin
                 2'd3: port_in <= dipsw[7:0];
             endcase
         end else if( esckids ) begin
-            if( cpu_we && A==16'h3fd0 ) begin
+            if( cpu_we && esckids_ctrl0_cs ) begin
                 rmrd     <= cpu_dout[3];
                 init     <= cpu_dout[4];
                 objcha_n <= ~cpu_dout[5];
             end
-            if( cpu_we && A==16'h3fd2 ) begin
+            if( cpu_we && esckids_ctrl2_cs ) begin
                 video_bank <= cpu_dout[0];
                 mono       <= cpu_dout[2];
                 eep_cs     <= cpu_dout[3];
@@ -582,7 +596,7 @@ always @(posedge clk) begin
                 irqen      <= cpu_dout[6];
             end
 `ifdef SIMULATION
-            if( cpu_we && A==16'h3fda && $test$plusargs("SMOKE_NOOP_DIAG") )
+            if( cpu_we && esckids_watchdog_cs && $test$plusargs("SMOKE_NOOP_DIAG") )
                 $display("Escape Kids write to documented no-op/watchdog candidate: %02X",cpu_dout);
 `endif
             if( joystk_cs ) case( A[1:0] )

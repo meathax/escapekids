@@ -29,21 +29,21 @@ module jtframe_reset(
     input       pll_locked,
 
     // clk_sys:
-    output  reg rst,
-    output  reg rst_n,
+    output  reg rst = 1'b1,
+    output  reg rst_n = 1'b0,
     // clk_rom:
-    output  reg game_rst,
-    output  reg game_rst_n
+    output  reg game_rst = 1'b1,
+    output  reg game_rst_n = 1'b0
 );
 
 localparam MAIN_RSTW = 4,
            GAME_RSTW = 8;
 
-reg [MAIN_RSTW-1:0] rst_cnt;
-reg [GAME_RSTW-1:0] game_rst_cnt;
-reg [MAIN_RSTW-1:0] rst_rom; // rst in clk_rom domain
-reg                 rst_rom_sync;
-reg [1:0]           rst_req_sync;
+reg [MAIN_RSTW-1:0] rst_cnt = {MAIN_RSTW{1'b1}};
+reg [GAME_RSTW-1:0] game_rst_cnt = {GAME_RSTW{1'b1}};
+reg [MAIN_RSTW-1:0] rst_rom = {MAIN_RSTW{1'b1}}; // rst in clk_rom domain
+reg                 rst_rom_sync = 1'b1;
+reg [1:0]           rst_req_sync = 2'b00;
 
 always @(posedge clk_sys, negedge pll_locked) begin
     if( !pll_locked ) begin

@@ -37,6 +37,8 @@ set_clock_groups -exclusive \
 # The board clock is the PLL's shifted 48 MHz output (general[1]) driven out
 # on the SDRAM_CLK pin; the SDRAM chip launches/captures at that clock while
 # the controller launches/captures at the unshifted 48 MHz (general[0]).
+# (JTFRAME_180SHIFT=1 would move this to an inverted DDIO-driven clock; that
+# configuration misses SDRAM output setup by ~2 ns and is not used.)
 set sdram_clk_src [get_pins {emu|u_jtframe|pll|u_pll|general[1].gpll~PLL_OUTPUT_COUNTER|divclk}]
 if { [get_collection_size $sdram_clk_src] != 1 } {
     error "Expected exactly one shifted-48MHz PLL output pin for SDRAM_CLK"

@@ -30,6 +30,7 @@ module jtsimson_sound(
     input           main_addr,
     input           main_rnw,
     input           mono,
+    input           voice_mute,
     // Surprise Attack has YM2151 connected directly to main CPU
     input           main_fmcs,
     output   [ 7:0] fm_dout,
@@ -72,6 +73,7 @@ module jtsimson_sound(
 `ifndef NOSOUND
 wire signed [15:0]  fm_l, fm_r, mix_l, mix_r;
 wire        [ 7:0]  cpu_dout, ram_dout, st_pcm, pcm_dout, mux_fmdin;
+wire        [ 3:0]  pcm_mix_en;
 wire        [15:0]  A;
 reg         [ 7:0]  cpu_din;
 wire                mreq_n, rd_n, wr_n, rfsh_n,
@@ -200,6 +202,19 @@ jt51 u_jt51(
     .xleft      (           ),
     .xright     (           )
 );
+escape_kids_voice_mute u_voice_mute(
+    .clk           ( clk         ),
+    .rst           ( rst_z80     ),
+    .enable        ( voice_mute  ),
+    .channel_bsy   ( pcm_bsy     ),
+    .ch0_start     ( pcma_start  ),
+    .ch1_start     ( pcmb_start  ),
+    .ch2_start     ( pcmc_start  ),
+    .ch3_start     ( pcmd_start  ),
+    .channel_en    ( snd_en[4:1] ),
+    .channel_en_out( pcm_mix_en  )
+);
+
 /* verilator tracing_off */
 jt053260 u_pcm(
     .rst        ( rst_z80   ),
@@ -248,7 +263,7 @@ jt053260 u_pcm(
     .channel_reverse( pcm_reverse ),
     // .romd_ok    ( pcmd_ok   ),
     // sound output - raw
-    .ch_en      (snd_en[5:1]),
+    .ch_en      ({snd_en[5],pcm_mix_en}),
     .aux_l      ( fm_l      ),
     .aux_r      ( fm_r      ),
     .snd_l      ( mix_l     ),
