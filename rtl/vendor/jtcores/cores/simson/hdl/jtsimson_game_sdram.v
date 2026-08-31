@@ -126,49 +126,7 @@ jtframe_rsthold u_hold(
 `endif
 );
 /* verilator tracing_on */
-// Escape Kids strip-diagnostic: intercept the game's RGB so the overlay can
-// be muxed onto it. With the macro off, the wires pass straight through.
-wire [`JTFRAME_COLORW-1:0] game_red, game_green, game_blue;
 wire [ 7:0] dwn_ovfl_cnt;
-`ifdef ESCKIDS_STRIP_DIAG
-escape_kids_strip_diag #(.COLORW(`JTFRAME_COLORW)) u_strip_diag(
-    .clk        ( clk           ),
-    .rst        ( rst           ),
-    .pxl_cen    ( pxl_cen       ),
-    .ena        ( ~ioctl_rom    ),
-    .lyrf_addr  ( lyrf_addr     ),
-    .lyra_addr  ( lyra_addr     ),
-    .lyrb_addr  ( lyrb_addr     ),
-    .lyrf_cs    ( lyrf_cs       ),
-    .lyra_cs    ( lyra_cs       ),
-    .lyrb_cs    ( lyrb_cs       ),
-    .lyrf_ok    ( lyrf_ok       ),
-    .lyra_ok    ( lyra_ok       ),
-    .lyrb_ok    ( lyrb_ok       ),
-    .ovfl_cnt   ( dwn_ovfl_cnt  ),
-    .ioctl_wr   ( ioctl_wr      ),
-    .ioctl_rom  ( ioctl_rom     ),
-    .header     ( header        ),
-    .ioctl_addr ( {1'b0, ioctl_addr} ),
-    .ioctl_dout ( ioctl_dout    ),
-    .prog_we    ( prog_we       ),
-    .prog_ack   ( prog_ack      ),
-    .prog_addr  ( prog_addr     ),
-    .prog_data  ( prog_data     ),
-    .prog_mask  ( prog_mask     ),
-    .prog_ba    ( prog_ba       ),
-    .LHBL       ( LHBL          ),
-    .LVBL       ( LVBL          ),
-    .game_r     ( game_red      ),
-    .game_g     ( game_green    ),
-    .game_b     ( game_blue     ),
-    .red        ( red           ),
-    .green      ( green         ),
-    .blue       ( blue          )
-);
-`else
-assign { red, green, blue } = { game_red, game_green, game_blue };
-`endif
 jtsimson_game u_game(
     .rst        ( rst_h     ),
     .clk        ( clk       ),
@@ -193,9 +151,9 @@ jtsimson_game u_game(
 
     .pxl2_cen       ( pxl2_cen      ),
     .pxl_cen        ( pxl_cen       ),
-    .red            ( game_red      ),
-    .green          ( game_green    ),
-    .blue           ( game_blue     ),
+    .red            ( red           ),
+    .green          ( green         ),
+    .blue           ( blue          ),
     .LHBL           ( LHBL          ),
     .LVBL           ( LVBL          ),
     .HS             ( HS            ),
@@ -352,7 +310,7 @@ jtsimson_game u_game(
     .gfx_en      ( gfx_en        )
 );
 /* verilator tracing_off */
-assign dwnld_busy = ioctl_rom | prom_we | prog_we; // prom_we is really just for sims
+assign dwnld_busy = ioctl_rom | ioctl_ram | prom_we | prog_we;
 assign dwnld_addr = ioctl_addr;
 `ifdef JTFRAME_SDRAM_XL
 wire [26:0] dwnld_addr_wide = dwnld_addr;
@@ -438,7 +396,7 @@ jtframe_rom_1slot #(
     .slot0_dout  ( main_data  ),
     .slot0_cs    ( main_cs    ),
     .slot0_ok    ( main_ok    ),
-    
+
     // SDRAM controller interface
     .sdram_ack   ( ba_ack[0]  ),
     .sdram_rd    ( ba_rd[0]   ),

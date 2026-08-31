@@ -41,6 +41,7 @@
 // push the layer-B word past its deadline and produce stale 8x1 strips on
 // hardware only (the Verilator bench models SDRAM functionally and never
 // exercises controller arbitration).
+
 `define JTFRAME_BA2_PRIO
 // Second hardware-only latency source: when sustained CPU/PCM/sprite traffic
 // keeps the bus busy, the controller's refresh debt builds until its "help"
@@ -57,6 +58,11 @@
 `define JTFRAME_ARX 4
 `define JTFRAME_ARY 3
 // Defaults emitted by JTFRAME for non-line-buffer MiSTer targets.
+// SDRAM read capture phase. Moving capture one cycle later (180SHIFT=1) was
+// tried against the DQ[7:0] strip signature and REFUTED by timing: it drives
+// SDRAM_CLK from a DDIO cell inverted w.r.t. clk48 instead of the 90-degree
+// shifted PLL output, and the SDRAM output paths then miss setup by 1.965 ns
+// (they hold +1.9 ns at 180SHIFT=0). Do not re-enable without a new phase plan.
 `define JTFRAME_180SHIFT 0
 `define JTFRAME_SHIFT 1
 `define JTFRAME_LF_HW 9
@@ -66,11 +72,6 @@
 `define JTFRAME_MR_FASTIO 0
 `define JTFRAME_DIALEMU_LEFT 5
 `define JTFRAME_RELEASE
-`define JTFRAME_DEBUG_VPOS 0
-// Strip-diagnostic overlay build: on-screen late-fetch/drop counters and
-// per-line markers (see escape_kids_strip_diag.sv). DIAGNOSTIC ONLY -
-// remove this define (and its QSF twin) before any release build.
-`define ESCKIDS_STRIP_DIAG
 `define JTKCPU_DEBUG
 `define GAME_ROM_LEN 26'h6E0000
 
