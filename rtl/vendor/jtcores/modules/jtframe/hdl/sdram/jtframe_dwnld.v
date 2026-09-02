@@ -85,11 +85,11 @@ end
 localparam BA_EN   = BA1_START!=~27'd0 || BA2_START!=~27'd0 || BA3_START!=~27'd0 || BALUT!=0,
            PROM_EN = PROM_START!=~27'd0;
 /* verilator lint_on  WIDTH */
-reg  [ 7:0] data_out;
+reg  [15:0] data_out;
 wire        is_prom;
 reg  [26:0] part_addr, nohdr_addr;
 
-assign prog_data = {2{data_out}};
+assign prog_data = data_out;
 assign prog_rd   = 0;
 
 function [15:0] header_word;
@@ -130,10 +130,6 @@ reg  [ 2:0] bank;
 reg  [26:0] offset;
 reg  [26:0] eff_addr;
 reg [2*9*8-1:0] ba_start=0; // 16 bits per offset
-reg [SDRAMW-1:1] pend_addr;
-reg [ 7:0] pend_data;
-reg [ 1:0] pend_mask, pend_ba;
-reg        pend_we;
 reg        ioctl_wr1=0, ioctl_rom1=0, header1=0;
 reg [ 7:0] ioctl_dout1=0;
 reg [26:0] part_addr1=0;
@@ -144,7 +140,6 @@ wire [ 7:0] balut_bit_addr = { ioctl_addr[4:0], 3'b000 };
 wire [SDRAMW-1:1] nx_prog_addr = XL ? { bank[2], eff_addr[SDRAMW-2:1] } : eff_addr[SDRAMW-1:1];
 wire [ 1:0] nx_prog_mask = (eff_addr[0]^SWAB[0]) ? 2'b10 : 2'b01;
 wire [ 1:0] nx_prog_ba   = bank[1:0];
-wire        sdram_pending = prog_we && !sdram_ack;
 
 initial begin
     prog_addr = 0;
@@ -155,11 +150,6 @@ initial begin
     bank      = 0;
     offset    = 0;
     eff_addr  = 0;
-    pend_we   = 0;
-    pend_addr = 0;
-    pend_data = 0;
-    pend_mask = 2'b11;
-    pend_ba   = 0;
     data_out  = 0;
 end
 
@@ -232,8 +222,22 @@ endgenerate
 // a refresh burst, a row miss, a bank conflict - therefore dropped download
 // bytes, leaving those SDRAM words holding stale contents.  Queue the words
 // instead so a stall is absorbed rather than discarded.
+//
+// Byte pairing. The HPS delivers one byte per ioctl write. Writing each byte
+// on its own needs the SDRAM byte masks (DQML/DQMH) to protect the other
+// lane, and on real hardware the masked lane of the second write of a pair
+// was seen to be stored anyway: the low byte of a 16-bit word ended up equal
+// to its high byte (Escape Kids, 8x1 tile strips, decoded from screenshots
+// on 2026-09-03; the chip-model bench cannot reproduce it because the RTL
+// drives the mask correctly and the failure is at the pins). Rather than
+// depend on DQM timing at all, hold the first byte of every 16-bit word and
+// issue one unmasked full-word write when its partner arrives. The masks are
+// then never asserted during programming, so a marginal mask cannot unmask
+// or mask anything. A byte without a partner (a stream that ends on an odd
+// length, an address jump, a PROM byte, end of download) is flushed alone
+// with its own mask, so the general contract is unchanged.
 localparam FIFOAW = 6;   // 64 entries, enough for a full refresh burst
-localparam FIFODW = (SDRAMW-1) + 8 + 2 + 2;
+localparam FIFODW = (SDRAMW-1) + 16 + 2 + 2;
 
 reg  [FIFODW-1:0] fifo[0:(1<<FIFOAW)-1];
 reg  [FIFOAW:0]   fifo_wptr, fifo_rptr;
@@ -241,23 +245,40 @@ wire [FIFOAW:0]   fifo_used  = fifo_wptr - fifo_rptr;
 wire              fifo_empty = fifo_wptr == fifo_rptr;
 wire              fifo_full  = fifo_used == (1<<FIFOAW);
 wire [FIFODW-1:0] fifo_dout  = fifo[fifo_rptr[FIFOAW-1:0]];
-wire [FIFODW-1:0] fifo_din   = { nx_prog_addr, use_ioctl_dout, nx_prog_mask, nx_prog_ba };
 wire              new_word   = use_ioctl_wr && use_ioctl_rom && !use_header && !is_prom;
+wire              new_prom   = use_ioctl_wr && use_ioctl_rom && !use_header && is_prom;
 // A write slot is free when nothing is outstanding, or the outstanding one
 // is being acknowledged this cycle.
 wire              slot_free  = !prog_we || sdram_ack;
 
+// first byte of a word, waiting for its partner
+reg               half_v;
+reg  [SDRAMW-1:1] half_addr;
+reg  [ 7:0]       half_data;
+reg  [ 1:0]       half_mask, half_ba;
+wire              half_match = half_v && half_addr==nx_prog_addr &&
+                               half_ba==nx_prog_ba && half_mask!=nx_prog_mask;
+// dsn is active low: 2'b10 means the low lane is written
+wire [15:0]       pair_data  = half_mask==2'b10 ? { use_ioctl_dout, half_data } :
+                                                  { half_data, use_ioctl_dout };
+wire              push_pair  = new_word && half_match;
+wire              push_half  = half_v && ( !use_ioctl_rom || new_prom || (new_word && !half_match) );
+wire              push       = push_pair || push_half;
+wire [FIFODW-1:0] fifo_din   = push_pair ?
+        { nx_prog_addr, pair_data,     2'b00,     nx_prog_ba } :
+        { half_addr,    {2{half_data}}, half_mask, half_ba    };
+
 `ifdef SIMULATION
 integer fifo_ovfl = 0;
-always @(posedge clk) if( new_word && fifo_full && !(slot_free && fifo_empty) )
+always @(posedge clk) if( push && fifo_full && !(slot_free && fifo_empty) )
     fifo_ovfl <= fifo_ovfl + 1;
 `endif
 
 // Same drop condition as the simulation counter above, kept in hardware so
 // real boards can report it (fifo_full implies !fifo_empty, so the guard
-// reduces to new_word && fifo_full).
+// reduces to push && fifo_full).
 always @(posedge clk)
-    if( new_word && fifo_full && ovfl_cnt != 8'hff )
+    if( push && fifo_full && ovfl_cnt != 8'hff )
         ovfl_cnt <= ovfl_cnt + 8'd1;
 
 task issue_from_fifo; begin
@@ -270,21 +291,42 @@ end endtask
 initial begin
     fifo_wptr = 0;
     fifo_rptr = 0;
+    half_v    = 0;
+    half_addr = 0;
+    half_data = 0;
+    half_mask = 2'b11;
+    half_ba   = 0;
 end
 
 always @(posedge clk) begin
     // ---- enqueue side
-    if( new_word && !fifo_full ) begin
+    if( push && !fifo_full ) begin
         fifo[fifo_wptr[FIFOAW-1:0]] <= fifo_din;
         fifo_wptr <= fifo_wptr + 1'd1;
     end
 
+    // ---- pairing register
+    if( new_word ) begin
+        if( half_match ) begin
+            half_v <= 0;
+        end else begin
+            // the previous half, if any, is flushed by push_half this cycle
+            half_v    <= 1;
+            half_addr <= nx_prog_addr;
+            half_data <= use_ioctl_dout;
+            half_mask <= nx_prog_mask;
+            half_ba   <= nx_prog_ba;
+        end
+    end else if( push_half ) begin
+        half_v <= 0;
+    end
+
     // ---- PROM writes bypass the SDRAM path entirely
-    if( use_ioctl_wr && use_ioctl_rom && !use_header && is_prom ) begin
+    if( new_prom ) begin
         prog_addr <= use_part_addr[SDRAMW-2:0];
         prom_we   <= 1;
         prog_we   <= 0;
-        data_out  <= use_ioctl_dout;
+        data_out  <= {2{use_ioctl_dout}};
         prog_mask <= nx_prog_mask;
     end else if( slot_free ) begin
         // ---- dequeue side: start the next queued word, or go idle.
@@ -350,7 +392,7 @@ always @(posedge clk) begin
         prom_we   <= 1;
         prog_we   <= 0;
         prog_mask <= 2'b11;
-        data_out  <= mem[dumpcnt];
+        data_out  <= {2{mem[dumpcnt]}};
         prog_addr <= dumpcnt[SDRAMW-2:0]-HEADER;
         dumpcnt   <= dumpcnt+1;
     end else begin

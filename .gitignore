@@ -86,3 +86,5 @@ rtl/vendor/jtcores/modules/jtframe/hdl/ver/*
 *.rbf
 !/releases/
 !/releases/Arcade-EscapeKids_20260824.rbf
+!/releases/Arcade-EscapeKids_20260902.rbf
+!/releases/Arcade-EscapeKids_20260903.rbf

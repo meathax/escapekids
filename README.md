@@ -78,8 +78,8 @@ The main project is `EscapeKids.qpf`; `EscapeKids.qsf`, `EscapeKids.sdc`, `Escap
 The current public release is:
 
 ```text
-releases/Arcade-EscapeKids_20260831.rbf
-SHA-256: 1459F69FB7E78D4C11D819B017F7DFC73AC2907B4D1C547080E71342CD9B8C25
+releases/Arcade-EscapeKids_20260903.rbf
+SHA-256: 7E5D8A20F4A809988CC4DCB0B4CFC498E5D0A65DB8503A85683695E7C7230A32
 ```
 
 The RBF is compressed for MiSTer HPS configuration. Keep only the newest dated RBF in the root of `releases/`; the MRAs remain alongside it.
