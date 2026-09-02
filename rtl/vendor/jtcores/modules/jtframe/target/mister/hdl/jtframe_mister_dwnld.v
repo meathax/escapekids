@@ -244,17 +244,17 @@ always @(posedge clk, posedge rst) begin
         ddram_wait <= 0;
         ddram_rd   <= 0;
         tx_start   <= 0;
-    end else if(!ddram_busy ) begin
+    end else begin
         if( ddr_dwn  ) begin
             if( !ddram_wait ) begin
                 ddram_cnt  <= 0;
                 tx_start   <= 0;
-                if( tx_done && !tx_start ) begin
+                if( !ddram_busy && tx_done && !tx_start ) begin
                     ddram_rd   <= 1;
                     ddram_wait <= 1;
                 end
             end else begin
-                ddram_rd <= 0;
+                if( !ddram_busy ) ddram_rd <= 0;
                 if( ddram_dout_ready ) begin
                     ddram_cnt <= ddram_cnt + 1'b1;
                     if( cnt_over ) begin

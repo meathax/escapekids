@@ -566,14 +566,25 @@ always @(*) begin
     // Debt-forced refresh (help) only interleaves with pending requests
     // inside rfsh_win (or during ROM programming, when video is not live).
     // Idle refresh keeps its classic any-time behavior.
-    // During ROM programming the prog request keeps noreq low for the whole
-    // multi-second download, so refresh could only ever win through the debt
-    // "help" path and a saturated write stream can starve it completely.
-    // SDRAM rows still need refreshing while the download runs, so make
-    // refresh eligible at every all-idle window while prog_en is asserted.
-    rfsh_bg = &idle && (noreq_g | help_g | prog_en) && rfsh_br;
-    prog_bg = pre_br & !rfshing;
-    if( rfshing ) begin
+    //
+    // Refresh must never be granted in the same cycle as a bank or prog
+    // request. rfshing is registered, so in the grant cycle it is still low
+    // and the engines would otherwise see bg=1 together with rfsh_bg=1: the
+    // engine issues ACTIVATE, the refresh engine's PRECHARGE-ALL follows one
+    // clock later (tRAS violation, row closed) and the engine's WRITE/READ
+    // then addresses a closed bank. On the ROM download path a real SDRAM
+    // drops that write, which corrupted bank 0 on every cold load (the check
+    // reported ROM 17C BAD) and was only masked by SDRAM contents left over
+    // from a previous run of the same core. Proven at the pins with the
+    // mt48lc16m16a2 model ("Bank is not Activated for Write").
+    //
+    // A previous revision also granted refresh at every all-idle window
+    // while prog_en was asserted, to avoid starvation by a saturated write
+    // stream; that term is what exposed the race. The debt-forced "help"
+    // path already guarantees refresh during programming, so it is dropped.
+    rfsh_bg = &idle && (noreq_g | help_g) && rfsh_br;
+    prog_bg = pre_br & !rfshing & !rfsh_bg;
+    if( rfshing || rfsh_bg ) begin
         bg=0;
     end else begin
         if( BA2_PRIO ) begin

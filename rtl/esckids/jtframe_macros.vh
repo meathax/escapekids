@@ -30,10 +30,22 @@
 `define JTFRAME_BA0_LEN 32
 `define PCM_START 26'h0A0000
 `define JTFRAME_BA2_START 26'h1E0000
-// Fetch two vertically adjacent 32-bit tile rows per bank-2 transaction so
-// all three K052109 layers meet the K051962's fixed pixel-load deadline.
-`define JTFRAME_BA2_LEN 64
-`define JTFRAME_BA2_SLOT0_NODOUBLE
+// Bank 2 reads one 32-bit tile row per transaction (JTFRAME's default: no
+// JTFRAME_BA2_LEN, so BA2_LEN=32 and the mode register uses a 2-word burst).
+//
+// A previous revision set JTFRAME_BA2_LEN 64 to "fetch two vertically
+// adjacent tile rows per transaction". The second row is never reused: it is
+// the same tile's next scanline, and the two-entry romrq cache is overwritten
+// by the following 40 tiles long before that line is drawn. So the extra two
+// beats were pure DQ occupancy, and they cost far more than they saved.
+// Measured on the pin-level bank-2 bench (.mister/tb/tb_ba2_read.sv, chip
+// model in the loop, three layers plus CPU/PCM contention, 6000 fetch groups
+// each): 64-bit reads gave mean 19.0 clk48 but a max of 297 and 11 groups
+// (0.18%) past 64 clk48; 32-bit reads gave mean 22.0, max 23, and nothing
+// above 40. The K051962 latches each layer word on a fixed pixel deadline
+// with no valid signal (jt051962 has no lyrX_ok input at all), so every group
+// in that tail is an 8-pixel run of the previous fetch's data - the 8x1
+// strips on the scrolling background, at a rate matching the 0.18% tail.
 // The K051962 latches each layer word on a fixed pixel deadline with no
 // handshake, so bank 2 must win SDRAM arbitration ahead of the CPU (bank 0)
 // and PCM (bank 1) requests, which both tolerate waits.  Without this, a
