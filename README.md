@@ -1,106 +1,128 @@
-# Escape Kids — MiSTer FPGA Core
+# Escape Kids for MiSTer
 
-An FPGA recreation of Konami's 1991 *Escape Kids* arcade hardware for the MiSTer DE10-Nano platform. The core targets a standard MiSTer setup with an SDRAM expansion and a 15 kHz-class horizontal arcade display.
+An FPGA recreation of Konami's 1991 *Escape Kids* arcade hardware for the MiSTer DE10-Nano. The core supports the horizontal Asia four-player and Japan two-player releases, with the original cabinet profile selected by the MRA at ROM-load time.
+
+| | |
+| --- | --- |
+| **Target** | MiSTer DE10-Nano with an SDRAM expansion |
+| **Original hardware** | Konami GX975-class arcade board |
+| **Video** | Horizontal 15 kHz-class arcade timing, with MiSTer video options |
+| **Audio** | Stereo YM2151 and K053260-based sound path |
+| **Core file** | `Arcade-EscapeKids` |
 
 ## Supported games
 
-| MAME set | Game | Region | Players | MRA |
+| MAME set | Title | Region | Cabinet | MRA |
 | --- | --- | --- | --- | --- |
-| `esckids` | Escape Kids | Asia | 4 | `Escape Kids (Asia, 4 Players).mra` |
-| `esckidsj` | Escape Kids | Japan | 2 | `Escape Kids (Japan, 2 Players).mra` |
+| `esckids` | Escape Kids | Asia | 4 players | `Escape Kids (Asia, 4 Players).mra` |
+| `esckidsj` | Escape Kids | Japan | 2 players | `Escape Kids (Japan, 2 Players).mra` |
 
-Both MRAs use the same `Arcade-EscapeKids` core and select the cabinet/profile data through the ROM-loader header.
+Both sets use the same `Arcade-EscapeKids` RBF. The MRA header selects the correct game/cabinet profile; it is not an OSD setting.
 
 ## Features in the OSD
 
-- Run, Super Jump and Auto Run action buttons
-- Start, Coin, Service and Test controls
-- Native horizontal arcade video and MiSTer video options
-- Stereo audio
-- Optional "Mute One-Two Voice" toggle that silences the character "one, two" voice calls (sound-test entries 60 and 62)
-- Persistent 128-byte ER5911-compatible NVRAM for game high scores
-
-## **Hardware emulated**
-
-| PCB device / glue | Active RTL path | Evidence / status |
+| Control or option | Default | Purpose |
 | --- | --- | --- |
-| CUS1 / 053248 main CPU | `jtsimson_main.v` and `modules/jtkcpu` | Pinned `vendetta.cpp` main-CPU declaration/map plus JTCORES donor; INFERRED board integration. |
-| CUS8 / K052109 tile generator + CUS7 / K051962 timing | `jtsimson_scroll.v` through `jt052109.v` and `jt051962.v` | MAME K052109 map/device setup and JTCORES implementation; INFERRED board wiring. |
-| CUS4 / K053246 + CUS5 / K053247 GX975 sprite path | `jtriders_obj.v`, `jt053244.sv` and `jt053246_dma.v` | MAME GX975 sprite configuration/callback and JTCORES object path; INFERRED board wiring. |
-| CUS6 / K053251 priority and palette control | `jtsimson_colmix.v` and `jtcolmix_053251.v` | MAME priority-register/palette configuration and JTCORES implementation; INFERRED board wiring. |
-| CUS2 / K053252 CCU | `jtsimson_video.v` with `jtk053252.v` and `jtk053252_mmr.sv` | Furrtek die reverse engineering establishes the counter/register fields; MAME supplies the 24 MHz device integration; field model KNOWN, board integration INFERRED. |
-| CUS3 / K053260, YM2151 and Z80 sound system | `jtsimson_sound.v`, `jt053260`, `jt51` and `jtframe_z80.v` | Pinned MAME sound map/device setup plus JTCORES implementations; INFERRED board wiring. |
-| ER5911 serial EEPROM | `jtsimson_main.v` through `jt5911.sv` | MAME 128-byte EEPROM declaration and the JTCORES serial-device model; INFERRED board integration. |
-| Decoder/PAL glue | Escape branch of `jtsimson_main.v` | Pinned MAME `esckids_map` and the captured boot bus contract; INFERRED, with no standalone custom-PAL RTL identified. |
-| External ROM/SDRAM interface | `jtsimson_game_sdram.v` and `jtframe_sdram64.v` | MiSTer board storage/download path; platform glue, not an original custom Konami IC. |
-| MiSTer platform glue | `EscapeKids.sv` and vendored `sys/` | Template_MiSTer framework and HPS/OSD/video/audio integration; platform support, not PCB emulation. |
+| Run | `A` | Player run action |
+| Super Jump | `B` | Player super-jump action |
+| Auto Run | `X` | Enable the game-specific auto-run control |
+| Start / Coin | `Start` / `Select` | Cabinet start and coin inputs |
+| Service / Test | `L` / `R` | Cabinet service and test inputs |
+| Mute One-Two Voice | Off | Suppress only the character “one, two” voice calls; FM, PCM mixing, and other sound commands remain unchanged |
+| NVRAM | Persistent | Retains the 128-byte ER5911-compatible game EEPROM, including high scores |
+
+MiSTer's standard video controls remain available. The core is intended for horizontal output and declares the arcade `15kHz` resolution class in its MRAs.
 
 ## PCB Accuracy
 
-The table below lists only areas with a direct device or board-evidence basis. JTCORES and MAME are used elsewhere as implementation/reference sources, not as independent PCB proof.
+This section deliberately lists only behaviour supported by direct device or board evidence. MAME and JTCORES are valuable functional and implementation references, but are not treated as PCB proof.
 
-| Area | Evidence basis |
-| --- | --- |
-| K053252 CCU/raster registers | [Furrtek's published 053252 die reverse engineering](https://github.com/furrtek/SiliconRE/blob/master/Konami/053252/README.md) documents the counter widths, reset fields, reload values and sync inputs used by the project timing model. |
+| Verified area | Evidence | What the core uses it for |
+| --- | --- | --- |
+| Konami K053252 CCU raster-register model | [Furrtek's K053252 die-reverse-engineering notes](https://github.com/furrtek/SiliconRE/blob/master/Konami/053252/README.md) document the counter widths, reset fields, reload values, and sync inputs. | The project-owned CCU register model and raster timing path. |
 
-Claims about analog output, SDRAM margin and physical PCB timing require validation on the target hardware and are not inferred from a compiled bitstream alone.
+The board integration of the other devices below is currently **inferred** from the program behaviour, the pinned MAME driver, and established JTCORES implementations. No claim is made here for analog output characteristics, exact PCB propagation delay, or SDRAM margin; those need board-specific measurement or hardware capture.
+
+## **Hardware emulated**
+
+| Original device or function | Active FPGA path | Evidence status |
+| --- | --- | --- |
+| CUS1 / 053248 main CPU | `jtsimson_main.v` plus `modules/jtkcpu` | **INFERRED** — Escape Kids device map in the pinned MAME Konami/Vendetta driver and the JTCORES CPU integration. |
+| CUS8 K052109 tile generator and CUS7 K051962 timing | `jtsimson_scroll.v`, `jt052109.v`, and `jt051962.v` | **INFERRED** — MAME device/map declarations and the JTCORES implementation. |
+| CUS4 K053246 and CUS5 K053247 sprite system | `jtriders_obj.v`, `jt053244.sv`, and `jt053246_dma.v` | **INFERRED** — GX975 sprite configuration/callback behaviour and the JTCORES object pipeline. |
+| CUS6 K053251 priority and palette control | `jtsimson_colmix.v` and `jtcolmix_053251.v` | **INFERRED** — MAME priority/palette configuration and the JTCORES mixer. |
+| CUS2 K053252 CCU | `jtsimson_video.v`, `jtk053252.v`, and `jtk053252_mmr.sv` | **KNOWN** for the documented counter/register fields; **INFERRED** for this board's integration. |
+| CUS3 K053260, YM2151, and Z80 sound board | `jtsimson_sound.v`, `jt053260`, `jt51`, and `jtframe_z80.v` | **INFERRED** — MAME sound map/device configuration and the JTCORES sound devices. |
+| ER5911 serial EEPROM | `jtsimson_main.v` through `jt5911.sv` | **INFERRED** — MAME's 128-byte EEPROM declaration and the JTCORES serial-device model. |
+| Address decoder and PAL glue | Escape Kids branch in `jtsimson_main.v` | **INFERRED** — Escape Kids address-map behaviour and captured boot-bus contracts; no standalone custom-PAL model has been identified. |
+
+MiSTer ROM storage, SDRAM, HPS I/O, OSD, and video-output code are platform integration, not original Konami PCB devices.
 
 ## ROMs and MRAs
 
-Arcade ROM images are not included. Supply legally obtained MAME ROM archives matching the set names above. The MRAs describe the ROM interleaving, profile header and persistent NVRAM image used by the core.
+ROM images are not included. Use legally obtained archives matching the set names above. The MRAs supply the required ROM ordering, interleaving, cabinet-profile header, and default EEPROM image.
 
-The parent `esckids` MRA uses `esckids.zip`. The Japan clone MRA searches
-`esckids.zip|esckidsj.zip` by CRC for each external part, so it accepts the
-usual MAME layouts:
+The Asia MRA reads `esckids.zip`. The Japan-clone MRA searches `esckids.zip|esckidsj.zip` by CRC and supports the usual MAME layouts:
 
-- merged: one archive containing all parent and clone members;
-- split: `esckids.zip` plus the clone-only `esckidsj.zip`; or
-- non-merged: a complete `esckidsj.zip` archive.
+- merged: one archive containing parent and clone members;
+- split: `esckids.zip` plus clone-only `esckidsj.zip`; or
+- non-merged: one complete `esckidsj.zip` archive.
 
-For the split layout, keep both archives in the MAME ROM directory. The
-release XML can be checked with `python scripts/validate_mras.py`.
-
-For a manual installation, place the RBF and both MRA files in the same `_Arcade` folder (or the equivalent release folders):
-
-- `releases/Arcade-EscapeKids_20260831.rbf` to `/media/fat/_Arcade/`
-- both `.mra` files from `releases/` to `/media/fat/_Arcade/`
-
-The repository contains source, framework files, release metadata and the single latest RBF only. Quartus databases, simulation output, captures, ROM archives and other local build products are excluded.
-
-## Building from source
-
-The project follows the standard MiSTer core layout from [MiSTer-devel/Template_MiSTer](https://github.com/MiSTer-devel/Template_MiSTer). The pinned build target is Quartus Prime 17.0.2 Build 602 for the DE10-Nano Cyclone V `5CSEBA6U23`.
-
-The main project is `EscapeKids.qpf`; `EscapeKids.qsf`, `EscapeKids.sdc`, `EscapeKids.sv`, `files.qip`, `rtl/` and `sys/` contain the project and source closure. `cfgstr.hex` and `font0.hex` are runtime assets required by the MiSTer framework and are intentionally tracked. Generated Quartus output belongs in the ignored build directories.
-
-## Releases
-
-The current public release is:
+For a split layout, keep both archives in the MAME ROM directory. Validate the release XML after an MRA change with:
 
 ```text
-releases/Arcade-EscapeKids_20260903.rbf
-SHA-256: 7E5D8A20F4A809988CC4DCB0B4CFC498E5D0A65DB8503A85683695E7C7230A32
+python scripts/validate_mras.py
 ```
 
-The RBF is compressed for MiSTer HPS configuration. Keep only the newest dated RBF in the root of `releases/`; the MRAs remain alongside it.
+## How to install
 
-## Credits
+For a manual installation, copy the current RBF and the MRA you want to use to the same MiSTer Arcade directory:
 
-- [JTCORES](https://github.com/jotego/jtcores) and its contributors for the reusable arcade RTL and MiSTer framework components.
-- [MiSTer-devel/Template_MiSTer](https://github.com/MiSTer-devel/Template_MiSTer) for the standard project layout and platform framework.
-- The MAME project and its Konami/Vendetta driver for reference behavior and ROM mappings.
-- [Furrtek's SiliconREsearch](https://github.com/furrtek/SiliconRE) for the published Konami 053252 die reverse-engineering notes used to bound the CCU model.
-- The Escape Kids ROMs remain the property of their respective owners and are not distributed here.
+```text
+/media/fat/_Arcade/
+```
 
-## License
+The published files are:
 
-Project-specific source is released under GPL-3.0-or-later. Vendored JTCORES and framework components retain their upstream copyright and license notices; see [LICENSE](LICENSE) and [JTCORES-LICENSE](rtl/vendor/jtcores/JTCORES-LICENSE).
+| File | Repository location |
+| --- | --- |
+| Core RBF | `releases/Arcade-EscapeKids_20260903.rbf` |
+| Asia / four-player MRA | `releases/Escape Kids (Asia, 4 Players).mra` |
+| Japan / two-player MRA | `releases/_alternatives/EscapeKids/Escape Kids (Japan, 2 Players).mra` |
 
-## MiSTer Downloader
-
-Add this section to `/media/fat/downloader.ini`, then run **Update All**:
+To install through the MiSTer downloader, add the following to `downloader.ini`:
 
 ```ini
 [meathax/meatcores]
 db_url = https://raw.githubusercontent.com/meathax/meatcores/db/downloader_meathax_meatcores.zip
 ```
+
+Then run **Update All** from MiSTer. The updater places the core and MRA files in the appropriate Arcade location.
+
+## Building from source
+
+The main Quartus project is `EscapeKids.qpf`. Its source and constraint manifests are `EscapeKids.qsf`, `EscapeKids.sdc`, and `files.qip`. The supported production toolchain is Quartus Prime 17.0.2 Build 602 for the DE10-Nano Cyclone V `5CSEBA6U23`.
+
+Use `clean.bat` to remove generated Quartus output before a clean local build. Generated databases, simulation output, captures, and ROM images are intentionally not tracked.
+
+## Release
+
+The current committed release is `Arcade-EscapeKids_20260903.rbf`.
+
+```text
+SHA-256: 7E5D8A20F4A809988CC4DCB0B4CFC498E5D0A65DB8503A85683695E7C7230A32
+```
+
+The RBF is compressed for MiSTer's HPS configuration. Only the newest accepted dated RBF belongs in the root of `releases/`; the MRA files remain alongside it or in their documented alternatives directory.
+
+## Credits
+
+- [JTCORES](https://github.com/jotego/jtcores) and its contributors, for the reusable arcade RTL and MiSTer framework components.
+- [MiSTer-devel/Template_MiSTer](https://github.com/MiSTer-devel/Template_MiSTer), for the standard MiSTer project layout and platform framework.
+- [MAME](https://www.mamedev.org/), for reference behaviour, driver research, ROM naming, and ROM mappings.
+- [Furrtek's SiliconREsearch](https://github.com/furrtek/SiliconRE), for the K053252 die-reverse-engineering notes that bound the CCU model.
+- Konami and the original rights holders. Game ROMs are not distributed with this project.
+
+## License
+
+The repository's project-specific source is distributed under the [GNU General Public License, version 2](LICENSE). Vendored JTCORES and MiSTer framework components retain their upstream copyright and licence notices, including [JTCORES-LICENSE](rtl/vendor/jtcores/JTCORES-LICENSE).
