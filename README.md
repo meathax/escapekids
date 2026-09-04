@@ -94,7 +94,7 @@ To install through the MiSTer downloader, add the following to `downloader.ini`:
 
 ```ini
 [meathax/meatcores]
-db_url = https://raw.githubusercontent.com/meathax/meatcores/db/downloader_meathax_meatcores.zip
+db_url = https://raw.githubusercontent.com/meathax/meatcores/db/db.json.zip
 ```
 
 Then run **Update All** from MiSTer. The updater places the core and MRA files in the appropriate Arcade location.
